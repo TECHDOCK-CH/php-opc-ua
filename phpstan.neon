@@ -1,0 +1,10 @@
+includes:
+    - vendor/phpstan/phpstan-strict-rules/rules.neon
+
+parameters:
+    level: 8
+    paths:
+        - src
+    tmpDir: .phpstan.cache
+    reportUnmatchedIgnoredErrors: true
+    treatPhpDocTypesAsCertain: false

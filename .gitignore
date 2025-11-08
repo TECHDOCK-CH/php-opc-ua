@@ -1,0 +1,43 @@
+demo-projects
+temp
+# Composer
+/vendor/
+composer.lock
+
+# PHPUnit
+/.phpunit.cache/
+/coverage/
+
+# PHPStan
+/.phpstan.cache/
+
+# IDE
+/.idea/
+/.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Reference implementation (never commit)
+/UA-.NETStandard/
+
+# Build artifacts
+/build/
+/dist/
+
+# Logs
+*.log
+
+# Devenv
+.devenv*
+devenv.local.nix
+
+# direnv
+.direnv
+
+# pre-commit
+.pre-commit-config.yaml

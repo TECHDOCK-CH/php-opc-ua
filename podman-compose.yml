@@ -1,0 +1,21 @@
+version: "3.8"
+
+services:
+  prosys-opcua-simulation:
+    image: mcr.microsoft.com/iotedge/opc-plc:latest
+    container_name: prosys-opcua-simulation
+    ports:
+      - "4840:50000"              # host:container (opc-plc listens on 50000)
+    command: >
+      --plcname=DemoServer
+      --autoaccept
+      --unsecuretransport
+      --defaultuser=integration-user
+      --defaultpassword=integration-pass
+      --addtrustedusercertfile=/app/test-identity/test-user-cert.der
+    # tmpfs so the app can write PKI/certs under rootless Podman
+    tmpfs:
+      - /app/pki:rw,noexec,nosuid,nodev,size=64m,mode=0777
+    volumes:
+      - ./tests/fixtures/opc-plc:/app/test-identity:ro
+    restart: unless-stopped

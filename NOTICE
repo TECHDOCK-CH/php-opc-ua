@@ -1,0 +1,103 @@
+# NOTICE
+
+## PHP OPC UA Client Library
+
+Copyright (c) 2025 TechDock
+
+This library is licensed under the MIT License. See LICENSE file for details.
+
+## Source Attribution
+
+**This library is a PHP implementation of OPC UA client functionality based on the architecture and design of the OPC Foundation UA-.NETStandard implementation.**
+
+### Original Implementation
+
+This PHP client library is inspired by and based on the architecture of the C#/.NET implementation:
+
+- **Project**: OPC Foundation UA-.NETStandard
+- **Repository**: https://github.com/OPCFoundation/UA-.NETStandard
+- **Copyright**: OPC Foundation
+- **License**: Dual-license model
+  - RCL (Reference Code License) for OPC Foundation Corporate Members
+  - GPL 2.0 for non-members
+- **License Information**: https://opcfoundation.org/license/source/1.11/index.html
+
+### This PHP Implementation
+
+This PHP library:
+- Is an independent implementation of OPC UA client functionality
+- Follows the same architectural patterns as UA-.NETStandard
+- Maintains 100% wire-protocol compatibility with the OPC UA specification
+- Adapts the design to PHP 8.4+ idioms and type system
+- Focuses on client-only features (no server implementation)
+- Is approximately 35-40% the code volume of the .NET core stack
+
+**Implementation Approach:**
+- Hand-written message classes (not code-generated)
+- Modern PHP features (readonly classes, union types, match expressions)
+- Client-focused: Browse, Read, Write, Subscribe, Call, Historical data
+- Independent work licensed under MIT License
+
+While this is an independent implementation, we acknowledge that the architectural design, service structure, and implementation patterns are directly inspired by the excellent UA-.NETStandard project.
+
+**We are deeply grateful to the OPC Foundation and all UA-.NETStandard contributors for their outstanding reference implementation that informed this work.**
+
+## OPC Foundation
+
+OPC Unified Architecture (OPC UA) is a specification developed by the OPC Foundation.
+
+- OPC Foundation: https://opcfoundation.org/
+- OPC UA Specification: https://reference.opcfoundation.org/
+
+This library implements the OPC UA specification but is not affiliated with
+or endorsed by the OPC Foundation.
+
+## License Compatibility
+
+This PHP implementation is released under the MIT License as an independent implementation. Users should be aware:
+
+1. **This PHP Implementation (MIT License)**: Permissive license allowing commercial and
+   private use without source code disclosure requirements.
+
+2. **Original UA-.NETStandard (Dual License)**: If you are using or referencing
+   the original C#/.NET implementation, you must comply with its license terms
+   (RCL or GPL 2.0).
+
+3. **OPC UA Specification**: Implementation of the OPC UA specification does not
+   require OPC Foundation membership, though certification is available for members.
+
+## Usage Guidelines
+
+**If you use this PHP implementation:**
+- Subject to MIT License terms
+- Commercial use allowed
+- No source code disclosure required
+- Must include copyright notice and license
+
+**If you use UA-.NETStandard:**
+- OPC Foundation Corporate Members: RCL license
+- Non-Members: GPL 2.0 (requires source code disclosure)
+
+**Note:** This is an independent implementation. Using this PHP library does not require OPC Foundation membership or GPL compliance.
+
+## Third-Party Dependencies
+
+This library uses the following third-party packages:
+
+- **phpseclib/phpseclib** - MIT License
+  Copyright (c) 2007-2023 TerraFrost and Jim Wigginton
+
+- **symfony/cache** - MIT License
+  Copyright (c) 2004-2024 Fabien Potencier
+
+- **brick/date-time** - MIT License
+  Copyright (c) 2013-present Benjamin Morel
+
+- **monolog/monolog** - MIT License
+  Copyright (c) 2011-2024 Jordi Boggiano
+
+See composer.json for complete dependency list.
+
+## Trademarks
+
+OPC, OPC UA, and OPC Unified Architecture are trademarks of the OPC Foundation.
