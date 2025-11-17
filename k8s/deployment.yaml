@@ -1,0 +1,49 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: prosys-opcua-simulation
+  namespace: default
+spec:
+  selector:
+    app: prosys-opcua-simulation
+  ports:
+    - protocol: TCP
+      port: 4840
+      targetPort: 50000
+      nodePort: 30840
+  type: NodePort
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prosys-opcua-simulation
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prosys-opcua-simulation
+  template:
+    metadata:
+      labels:
+        app: prosys-opcua-simulation
+    spec:
+      containers:
+      - name: opcua-server
+        image: mcr.microsoft.com/iotedge/opc-plc:latest
+        ports:
+        - containerPort: 50000
+        args:
+          - --plcname=DemoServer
+          - --autoaccept
+          - --unsecuretransport
+          - --defaultuser=integration-user
+          - --defaultpassword=integration-pass
+        volumeMounts:
+        - name: pki-tmpfs
+          mountPath: /app/pki
+      volumes:
+      - name: pki-tmpfs
+        emptyDir:
+          sizeLimit: 64Mi
+      restartPolicy: Always
