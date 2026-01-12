@@ -663,7 +663,7 @@ final readonly class StatusCode implements IEncodeable
 
     public function toString(): string
     {
-        return sprintf('0x%%08X', $this->value);
+        return sprintf('0x%08X', $this->value);
     }
 
     public function __toString(): string

@@ -262,6 +262,12 @@ final class ClientBuilder
         // Create session
         $session = $client->createSession();
         $session->create();
+
+        // Ensure anonymous policyId matches the server's token policy.
+        if ($this->userIdentity !== null && $this->userIdentity->isAnonymous()) {
+            $this->userIdentity = UserIdentity::anonymousFromSession($session);
+        }
+
         $session->activate($this->userIdentity);
 
         // Configure performance features

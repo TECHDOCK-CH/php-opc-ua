@@ -50,14 +50,14 @@ final readonly class ActivateSessionResponse implements IEncodeable
         $serverNonce = $decoder->readByteString() ?? '';
 
         // Results
-        $resultCount = $decoder->readUInt32();
+        $resultCount = $decoder->readArrayLength();
         $results = [];
         for ($i = 0; $i < $resultCount; $i++) {
             $results[] = $decoder->readUInt32();
         }
 
         // Diagnostic infos
-        $diagnosticCount = $decoder->readUInt32();
+        $diagnosticCount = $decoder->readArrayLength();
         $diagnosticInfos = [];
         for ($i = 0; $i < $diagnosticCount; $i++) {
             $diagnosticInfos[] = $decoder->readByte();

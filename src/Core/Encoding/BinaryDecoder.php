@@ -172,6 +172,24 @@ final class BinaryDecoder
     }
 
     /**
+     * Read an OPC UA array length (Int32; -1 means null/empty).
+     */
+    public function readArrayLength(): int
+    {
+        $length = $this->readInt32();
+
+        if ($length === -1) {
+            return 0;
+        }
+
+        if ($length < -1) {
+            throw new RuntimeException("Invalid array length: {$length}");
+        }
+
+        return $length;
+    }
+
+    /**
      * Read a byte string (4-byte length prefix + raw bytes)
      * Returns null if length is -1
      */

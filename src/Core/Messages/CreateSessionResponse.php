@@ -84,14 +84,14 @@ final readonly class CreateSessionResponse implements IEncodeable, ServiceRespon
         $serverCertificate = $decoder->readByteString();
 
         // Server endpoints
-        $endpointCount = $decoder->readUInt32();
+        $endpointCount = $decoder->readArrayLength();
         $serverEndpoints = [];
         for ($i = 0; $i < $endpointCount; $i++) {
             $serverEndpoints[] = EndpointDescription::decode($decoder);
         }
 
         // Server software certificates
-        $certCount = $decoder->readUInt32();
+        $certCount = $decoder->readArrayLength();
         $serverSoftwareCertificates = [];
         for ($i = 0; $i < $certCount; $i++) {
             $serverSoftwareCertificates[] = SignedSoftwareCertificate::decode($decoder);
