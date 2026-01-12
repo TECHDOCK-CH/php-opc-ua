@@ -41,8 +41,9 @@ final readonly class AcknowledgeMessage
             );
         }
 
-        if ($maxMessageSize < 8192) {
-            throw new InvalidArgumentException("Max message size must be at least 8192 bytes, got {$maxMessageSize}");
+        // Per OPC UA spec: 0 means unlimited, otherwise must be at least 8192
+        if ($maxMessageSize !== 0 && $maxMessageSize < 8192) {
+            throw new InvalidArgumentException("Max message size must be 0 (unlimited) or at least 8192 bytes, got {$maxMessageSize}");
         }
 
         if ($maxChunkCount < 0) {
