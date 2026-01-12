@@ -88,12 +88,20 @@ final class HelloMessageTest extends TestCase
     public function testInvalidMaxChunkCount(): void
     {
         $this->expectException(InvalidArgumentException::class);
-        new HelloMessage(0, 65536, 65536, 16777216, 0, 'opc.tcp://localhost:4840');
+        new HelloMessage(0, 65536, 65536, 16777216, -1, 'opc.tcp://localhost:4840');
     }
 
     public function testInvalidEmptyEndpointUrl(): void
     {
         $this->expectException(InvalidArgumentException::class);
         new HelloMessage(0, 65536, 65536, 16777216, 4096, '');
+    }
+
+    public function testMaxChunkCountZeroAllowed(): void
+    {
+        // 0 means unlimited chunks according to OPC UA spec
+        $msg = new HelloMessage(0, 65536, 65536, 16777216, 0, 'opc.tcp://localhost:4840');
+
+        $this->assertSame(0, $msg->maxChunkCount);
     }
 }
