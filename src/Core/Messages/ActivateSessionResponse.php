@@ -31,14 +31,14 @@ final readonly class ActivateSessionResponse implements IEncodeable
         $encoder->writeByteString($this->serverNonce);
 
         // Results
-        $encoder->writeUInt32(count($this->results));
+        $encoder->writeInt32(count($this->results));
         foreach ($this->results as $result) {
             // TODO: Implement StatusCode array encoding
             $encoder->writeUInt32(0);
         }
 
         // Diagnostic infos
-        $encoder->writeUInt32(count($this->diagnosticInfos));
+        $encoder->writeInt32(count($this->diagnosticInfos));
         foreach ($this->diagnosticInfos as $info) {
             $encoder->writeByte(0); // Empty diagnostic info
         }
