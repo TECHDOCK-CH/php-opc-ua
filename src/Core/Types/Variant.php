@@ -197,6 +197,9 @@ final readonly class Variant implements IEncodeable
             VariantType::NodeId => $value instanceof NodeId
                 ? $value->encode($encoder)
                 : throw new RuntimeException('Expected NodeId'),
+            VariantType::ExpandedNodeId => $value instanceof ExpandedNodeId
+                ? $value->encode($encoder)
+                : throw new RuntimeException('Expected ExpandedNodeId'),
             VariantType::StatusCode => $value instanceof StatusCode
                 ? $value->encode($encoder)
                 : throw new RuntimeException('Expected StatusCode'),
@@ -209,6 +212,16 @@ final readonly class Variant implements IEncodeable
             VariantType::ExtensionObject => $value instanceof ExtensionObject
                 ? $value->encode($encoder)
                 : throw new RuntimeException('Expected ExtensionObject'),
+            VariantType::DataValue => $value instanceof DataValue
+                ? $value->encode($encoder)
+                : throw new RuntimeException('Expected DataValue'),
+            VariantType::Variant => $value instanceof self
+                ? $value->encode($encoder)
+                : throw new RuntimeException('Expected Variant'),
+            VariantType::DiagnosticInfo => $value instanceof DiagnosticInfo
+                ? $value->encode($encoder)
+                : throw new RuntimeException('Expected DiagnosticInfo'),
+            VariantType::XmlElement => $encoder->writeString(is_string($value) ? $value : null),
             default => throw new RuntimeException("Unsupported variant type: {$this->type->name}"),
         };
     }
@@ -279,10 +292,15 @@ final readonly class Variant implements IEncodeable
             VariantType::Guid => $decoder->readGuid(),
             VariantType::DateTime => DateTime::decode($decoder),
             VariantType::NodeId => NodeId::decode($decoder),
+            VariantType::ExpandedNodeId => ExpandedNodeId::decode($decoder),
             VariantType::StatusCode => StatusCode::decode($decoder),
             VariantType::QualifiedName => QualifiedName::decode($decoder),
             VariantType::LocalizedText => LocalizedText::decode($decoder),
             VariantType::ExtensionObject => ExtensionObject::decode($decoder),
+            VariantType::DataValue => DataValue::decode($decoder),
+            VariantType::Variant => self::decode($decoder),
+            VariantType::DiagnosticInfo => DiagnosticInfo::decode($decoder),
+            VariantType::XmlElement => $decoder->readString(),
             default => throw new RuntimeException("Unsupported variant type: {$type->name}"),
         };
     }
