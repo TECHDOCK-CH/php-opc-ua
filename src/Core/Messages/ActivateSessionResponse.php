@@ -33,14 +33,21 @@ final readonly class ActivateSessionResponse implements IEncodeable
         // Results
         $encoder->writeInt32(count($this->results));
         foreach ($this->results as $result) {
-            // TODO: Implement StatusCode array encoding
-            $encoder->writeUInt32(0);
+            if ($result instanceof \TechDock\OpcUa\Core\Types\StatusCode) {
+                $result->encode($encoder);
+            } else {
+                $encoder->writeUInt32((int)$result);
+            }
         }
 
         // Diagnostic infos
         $encoder->writeInt32(count($this->diagnosticInfos));
         foreach ($this->diagnosticInfos as $info) {
-            $encoder->writeByte(0); // Empty diagnostic info
+            if ($info instanceof \TechDock\OpcUa\Core\Types\DiagnosticInfo) {
+                $info->encode($encoder);
+            } else {
+                $encoder->writeByte(0); // Empty diagnostic info fallback
+            }
         }
     }
 
@@ -53,14 +60,14 @@ final readonly class ActivateSessionResponse implements IEncodeable
         $resultCount = $decoder->readArrayLength();
         $results = [];
         for ($i = 0; $i < $resultCount; $i++) {
-            $results[] = $decoder->readUInt32();
+            $results[] = \TechDock\OpcUa\Core\Types\StatusCode::decode($decoder);
         }
 
         // Diagnostic infos
         $diagnosticCount = $decoder->readArrayLength();
         $diagnosticInfos = [];
         for ($i = 0; $i < $diagnosticCount; $i++) {
-            $diagnosticInfos[] = $decoder->readByte();
+            $diagnosticInfos[] = \TechDock\OpcUa\Core\Types\DiagnosticInfo::decode($decoder);
         }
 
         return new self(

@@ -35,8 +35,7 @@ final readonly class BrowseNextResponse implements IEncodeable
 
         $encoder->writeInt32(count($this->diagnosticInfos));
         foreach ($this->diagnosticInfos as $diagnosticInfo) {
-            // TODO: Implement DiagnosticInfo encoding
-            $encoder->writeByte(0); // Empty diagnostic info for now
+            $diagnosticInfo->encode($encoder);
         }
     }
 
@@ -53,8 +52,7 @@ final readonly class BrowseNextResponse implements IEncodeable
         $diagnosticCount = $decoder->readArrayLength();
         $diagnosticInfos = [];
         for ($i = 0; $i < $diagnosticCount; $i++) {
-            // TODO: Implement DiagnosticInfo decoding
-            $decoder->readByte(); // Skip empty diagnostic info for now
+            $diagnosticInfos[] = DiagnosticInfo::decode($decoder);
         }
 
         return new self(
