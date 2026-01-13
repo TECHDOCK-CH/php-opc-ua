@@ -540,14 +540,18 @@ final class SecureChannel
     private function sendSymmetricRequestChunks(string $securityHeaderBytes, string $messageBody, int $requestId): void
     {
         $bodyLength = strlen($messageBody);
-
-        if ($this->maxMessageSize > 0 && $bodyLength > $this->maxMessageSize) {
-            throw new RuntimeException(
-                "Request exceeds max message size ({$bodyLength} > {$this->maxMessageSize})"
-            );
+        $effectiveSendBufferSize = $this->sendBufferSize;
+        if ($this->maxMessageSize > 0) {
+            $effectiveSendBufferSize = $effectiveSendBufferSize > 0
+                ? min($effectiveSendBufferSize, $this->maxMessageSize)
+                : $this->maxMessageSize;
         }
 
-        $maxChunkBodySize = $this->calculateMaxChunkBodySize(strlen($securityHeaderBytes), $bodyLength);
+        $maxChunkBodySize = $this->calculateMaxChunkBodySize(
+            strlen($securityHeaderBytes),
+            $bodyLength,
+            $effectiveSendBufferSize
+        );
         if ($bodyLength > 0 && $maxChunkBodySize <= 0) {
             throw new RuntimeException('Send buffer too small for request payload');
         }
@@ -579,6 +583,11 @@ final class SecureChannel
             );
 
             $messageSize = MessageHeader::HEADER_SIZE + strlen($payload);
+            if ($this->maxMessageSize > 0 && $messageSize > $this->maxMessageSize) {
+                throw new RuntimeException(
+                    "Request chunk exceeds max message size ({$messageSize} > {$this->maxMessageSize})"
+                );
+            }
             $messageHeader = ($index === $chunkCount - 1)
                 ? MessageHeader::final(MessageType::Message, $messageSize)
                 : MessageHeader::intermediate(MessageType::Message, $messageSize);
@@ -599,15 +608,15 @@ final class SecureChannel
         int $requestId
     ): void {
         $bodyLength = strlen($messageBody);
-
-        if ($this->maxMessageSize > 0 && $bodyLength > $this->maxMessageSize) {
-            throw new RuntimeException(
-                "Request exceeds max message size ({$bodyLength} > {$this->maxMessageSize})"
-            );
+        $effectiveSendBufferSize = $this->sendBufferSize;
+        if ($this->maxMessageSize > 0) {
+            $effectiveSendBufferSize = $effectiveSendBufferSize > 0
+                ? min($effectiveSendBufferSize, $this->maxMessageSize)
+                : $this->maxMessageSize;
         }
 
-        $maxPayloadSize = $this->sendBufferSize > 0
-            ? $this->sendBufferSize - MessageHeader::HEADER_SIZE - strlen($securityHeaderBytes)
+        $maxPayloadSize = $effectiveSendBufferSize > 0
+            ? $effectiveSendBufferSize - MessageHeader::HEADER_SIZE - strlen($securityHeaderBytes)
             : $bodyLength + 8;
 
         $sequenceHeaderSize = 8;
@@ -639,6 +648,11 @@ final class SecureChannel
 
             $payload = $securityHeaderBytes . $sequenceHeaderBytes . $chunkBody;
             $messageSize = MessageHeader::HEADER_SIZE + strlen($payload);
+            if ($this->maxMessageSize > 0 && $messageSize > $this->maxMessageSize) {
+                throw new RuntimeException(
+                    "Request chunk exceeds max message size ({$messageSize} > {$this->maxMessageSize})"
+                );
+            }
 
             $messageHeader = ($index === $chunkCount - 1)
                 ? MessageHeader::final($messageType, $messageSize)
@@ -696,13 +710,18 @@ final class SecureChannel
     /**
      * Calculate the maximum request body size per chunk.
      */
-    private function calculateMaxChunkBodySize(int $securityHeaderLength, int $bodyLength): int
+    private function calculateMaxChunkBodySize(
+        int $securityHeaderLength,
+        int $bodyLength,
+        ?int $sendBufferSize = null
+    ): int
     {
-        if ($this->sendBufferSize <= 0) {
+        $sendBufferSize = $sendBufferSize ?? $this->sendBufferSize;
+        if ($sendBufferSize <= 0) {
             return $bodyLength;
         }
 
-        $maxPayloadSize = $this->sendBufferSize - MessageHeader::HEADER_SIZE - $securityHeaderLength;
+        $maxPayloadSize = $sendBufferSize - MessageHeader::HEADER_SIZE - $securityHeaderLength;
         if ($maxPayloadSize <= 0) {
             return 0;
         }
