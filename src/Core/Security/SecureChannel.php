@@ -395,30 +395,14 @@ final class SecureChannel
         $securityHeader->encode($securityHeaderEncoder);
         $securityHeaderBytes = $securityHeaderEncoder->getBytes();
 
-        // Build sequence header
-        $sequenceHeader = new SequenceHeader(
-            sequenceNumber: $this->nextSequenceNumber(),
-            requestId: $this->nextRequestId()
+        $requestId = $this->nextRequestId();
+
+        $this->sendAsymmetricRequestChunks(
+            $securityHeaderBytes,
+            $messageBody,
+            MessageType::OpenSecureChannel,
+            $requestId
         );
-        $sequenceHeaderEncoder = new BinaryEncoder();
-        $sequenceHeader->encode($sequenceHeaderEncoder);
-        $sequenceHeaderBytes = $sequenceHeaderEncoder->getBytes();
-
-        // Calculate total message size (Header 8 bytes + Security Header + Sequence Header + Body)
-        $messageSize = MessageHeader::HEADER_SIZE
-            + strlen($securityHeaderBytes)
-            + strlen($sequenceHeaderBytes)
-            + strlen($messageBody);
-
-        // Build message header
-        $messageHeader = MessageHeader::final(MessageType::OpenSecureChannel, $messageSize);
-        $headerEncoder = new BinaryEncoder();
-        $messageHeader->encode($headerEncoder);
-        $headerBytes = $headerEncoder->getBytes();
-
-        // Send complete message
-        $completeMessage = $headerBytes . $securityHeaderBytes . $sequenceHeaderBytes . $messageBody;
-        $this->connection->send($completeMessage);
     }
 
     /**
@@ -426,33 +410,35 @@ final class SecureChannel
      */
     private function receiveOpenSecureChannelResponse(): OpenSecureChannelResponse
     {
-        // Receive message header
-        $header = $this->connection->receiveHeader();
+        $chunkReader = new MessageChunkReader(
+            $this->connection,
+            $this->receiveBufferSize,
+            $this->maxMessageSize,
+            $this->maxChunkCount
+        );
+        $chunks = $chunkReader->read(MessageType::OpenSecureChannel);
 
-        if ($header->messageType === MessageType::Error) {
-            $payload = $this->connection->receive($header->getPayloadSize());
-            $headerEncoder = new BinaryEncoder();
-            $header->encode($headerEncoder);
-            $decoder = new BinaryDecoder($headerEncoder->getBytes() . $payload);
-            $error = ErrorMessage::decode($decoder);
-            throw new RuntimeException("Server returned error: {$error->reason}");
+        $assembledBody = '';
+        $expectedRequestId = null;
+
+        foreach ($chunks as $chunk) {
+            if ($chunk->header->isAbort()) {
+                throw new RuntimeException('Server aborted the open secure channel response');
+            }
+
+            [$requestId, $sequenceNumber, $bodyChunk] = $this->decodeAsymmetricChunk($chunk->payload);
+
+            if ($expectedRequestId === null) {
+                $expectedRequestId = $requestId;
+            } elseif ($requestId !== $expectedRequestId) {
+                throw new RuntimeException('Mismatched requestId in open secure channel response chunks');
+            }
+
+            $this->validateSequenceNumber($sequenceNumber);
+            $assembledBody .= $bodyChunk;
         }
 
-        if ($header->messageType !== MessageType::OpenSecureChannel) {
-            throw new RuntimeException("Expected OPN response, got {$header->messageType->value}");
-        }
-
-        // Receive payload
-        $payload = $this->connection->receive($header->getPayloadSize());
-
-        // Decode the response
-        $decoder = new BinaryDecoder($payload);
-
-        // Decode asymmetric security header
-        $securityHeader = AsymmetricSecurityHeader::decode($decoder);
-
-        // Decode sequence header
-        $sequenceHeader = SequenceHeader::decode($decoder);
+        $decoder = new BinaryDecoder($assembledBody);
 
         // Decode TypeId
         $typeId = NodeId::decode($decoder);
@@ -596,6 +582,67 @@ final class SecureChannel
             $messageHeader = ($index === $chunkCount - 1)
                 ? MessageHeader::final(MessageType::Message, $messageSize)
                 : MessageHeader::intermediate(MessageType::Message, $messageSize);
+            $headerEncoder = new BinaryEncoder();
+            $messageHeader->encode($headerEncoder);
+
+            $this->connection->send($headerEncoder->getBytes() . $payload);
+        }
+    }
+
+    /**
+     * Send an asymmetric message (OPN) as one or more chunks.
+     */
+    private function sendAsymmetricRequestChunks(
+        string $securityHeaderBytes,
+        string $messageBody,
+        MessageType $messageType,
+        int $requestId
+    ): void {
+        $bodyLength = strlen($messageBody);
+
+        if ($this->maxMessageSize > 0 && $bodyLength > $this->maxMessageSize) {
+            throw new RuntimeException(
+                "Request exceeds max message size ({$bodyLength} > {$this->maxMessageSize})"
+            );
+        }
+
+        $maxPayloadSize = $this->sendBufferSize > 0
+            ? $this->sendBufferSize - MessageHeader::HEADER_SIZE - strlen($securityHeaderBytes)
+            : $bodyLength + 8;
+
+        $sequenceHeaderSize = 8;
+        $maxChunkBodySize = $maxPayloadSize - $sequenceHeaderSize;
+
+        if ($bodyLength > 0 && $maxChunkBodySize <= 0) {
+            throw new RuntimeException('Send buffer too small for open secure channel payload');
+        }
+
+        $chunkBodies = $bodyLength === 0
+            ? ['']
+            : $this->splitMessageBody($messageBody, $maxChunkBodySize);
+
+        $chunkCount = count($chunkBodies);
+        if ($this->maxChunkCount > 0 && $chunkCount > $this->maxChunkCount) {
+            throw new RuntimeException(
+                "Request exceeds max chunk count ({$chunkCount} > {$this->maxChunkCount})"
+            );
+        }
+
+        foreach ($chunkBodies as $index => $chunkBody) {
+            $sequenceHeader = new SequenceHeader(
+                sequenceNumber: $this->nextSequenceNumber(),
+                requestId: $requestId
+            );
+            $sequenceHeaderEncoder = new BinaryEncoder();
+            $sequenceHeader->encode($sequenceHeaderEncoder);
+            $sequenceHeaderBytes = $sequenceHeaderEncoder->getBytes();
+
+            $payload = $securityHeaderBytes . $sequenceHeaderBytes . $chunkBody;
+            $messageSize = MessageHeader::HEADER_SIZE + strlen($payload);
+
+            $messageHeader = ($index === $chunkCount - 1)
+                ? MessageHeader::final($messageType, $messageSize)
+                : MessageHeader::intermediate($messageType, $messageSize);
             $headerEncoder = new BinaryEncoder();
             $messageHeader->encode($headerEncoder);
 
@@ -832,6 +879,22 @@ final class SecureChannel
         $chunkDecoder = new BinaryDecoder($plaintext);
         $sequenceHeader = SequenceHeader::decode($chunkDecoder);
         $body = substr($plaintext, $chunkDecoder->getPosition());
+
+        return [$sequenceHeader->requestId, $sequenceHeader->sequenceNumber, $body];
+    }
+
+    /**
+     * Decode an asymmetric response chunk and return its body.
+     *
+     * @return array{0:int,1:int,2:string} requestId, sequenceNumber, bodyChunk
+     */
+    private function decodeAsymmetricChunk(string $payload): array
+    {
+        $decoder = new BinaryDecoder($payload);
+        AsymmetricSecurityHeader::decode($decoder);
+
+        $sequenceHeader = SequenceHeader::decode($decoder);
+        $body = substr($payload, $decoder->getPosition());
 
         return [$sequenceHeader->requestId, $sequenceHeader->sequenceNumber, $body];
     }
