@@ -8,6 +8,14 @@
         <exclude name="PSR1.Classes.ClassDeclaration.MultipleClasses"/>
     </rule>
 
+    <!-- Customize Line Length -->
+    <rule ref="Generic.Files.LineLength">
+        <properties>
+            <property name="lineLimit" value="180"/>
+            <property name="absoluteLineLimit" value="0"/>
+        </properties>
+    </rule>
+
     <!-- Show progress -->
     <arg value="p"/>
     

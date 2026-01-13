@@ -7,6 +7,8 @@ namespace TechDock\OpcUa\Core\Messages;
 use TechDock\OpcUa\Core\Encoding\BinaryDecoder;
 use TechDock\OpcUa\Core\Encoding\BinaryEncoder;
 use TechDock\OpcUa\Core\Encoding\IEncodeable;
+use TechDock\OpcUa\Core\Types\DiagnosticInfo;
+use TechDock\OpcUa\Core\Types\StatusCode;
 
 /**
  * ActivateSessionResponse - Response to ActivateSessionRequest
@@ -33,7 +35,7 @@ final readonly class ActivateSessionResponse implements IEncodeable
         // Results
         $encoder->writeInt32(count($this->results));
         foreach ($this->results as $result) {
-            if ($result instanceof \TechDock\OpcUa\Core\Types\StatusCode) {
+            if ($result instanceof StatusCode) {
                 $result->encode($encoder);
             } else {
                 $encoder->writeUInt32((int)$result);
@@ -43,7 +45,7 @@ final readonly class ActivateSessionResponse implements IEncodeable
         // Diagnostic infos
         $encoder->writeInt32(count($this->diagnosticInfos));
         foreach ($this->diagnosticInfos as $info) {
-            if ($info instanceof \TechDock\OpcUa\Core\Types\DiagnosticInfo) {
+            if ($info instanceof DiagnosticInfo) {
                 $info->encode($encoder);
             } else {
                 $encoder->writeByte(0); // Empty diagnostic info fallback
@@ -60,14 +62,14 @@ final readonly class ActivateSessionResponse implements IEncodeable
         $resultCount = $decoder->readArrayLength();
         $results = [];
         for ($i = 0; $i < $resultCount; $i++) {
-            $results[] = \TechDock\OpcUa\Core\Types\StatusCode::decode($decoder);
+            $results[] = StatusCode::decode($decoder);
         }
 
         // Diagnostic infos
         $diagnosticCount = $decoder->readArrayLength();
         $diagnosticInfos = [];
         for ($i = 0; $i < $diagnosticCount; $i++) {
-            $diagnosticInfos[] = \TechDock\OpcUa\Core\Types\DiagnosticInfo::decode($decoder);
+            $diagnosticInfos[] = DiagnosticInfo::decode($decoder);
         }
 
         return new self(

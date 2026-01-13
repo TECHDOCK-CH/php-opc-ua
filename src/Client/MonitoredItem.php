@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace TechDock\OpcUa\Client;
 
-use RuntimeException;
 use TechDock\OpcUa\Core\Types\AggregateFilter;
 use TechDock\OpcUa\Core\Types\DataChangeFilter;
 use TechDock\OpcUa\Core\Types\DataValue;

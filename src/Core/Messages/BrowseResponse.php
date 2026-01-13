@@ -7,6 +7,7 @@ namespace TechDock\OpcUa\Core\Messages;
 use TechDock\OpcUa\Core\Encoding\BinaryDecoder;
 use TechDock\OpcUa\Core\Encoding\BinaryEncoder;
 use TechDock\OpcUa\Core\Encoding\IEncodeable;
+use TechDock\OpcUa\Core\Types\DiagnosticInfo;
 
 /**
  * BrowseResponse - Response to a Browse request

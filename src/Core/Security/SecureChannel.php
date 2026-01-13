@@ -18,9 +18,9 @@ use TechDock\OpcUa\Core\Messages\ServiceFault;
 use TechDock\OpcUa\Core\Transport\AcknowledgeMessage;
 use TechDock\OpcUa\Core\Transport\ErrorMessage;
 use TechDock\OpcUa\Core\Transport\HelloMessage;
+use TechDock\OpcUa\Core\Transport\MessageChunkReader;
 use TechDock\OpcUa\Core\Transport\MessageHeader;
 use TechDock\OpcUa\Core\Transport\MessageType;
-use TechDock\OpcUa\Core\Transport\MessageChunkReader;
 use TechDock\OpcUa\Core\Transport\TcpConnectionInterface;
 use TechDock\OpcUa\Core\Types\NodeId;
 use Throwable;
@@ -714,8 +714,7 @@ final class SecureChannel
         int $securityHeaderLength,
         int $bodyLength,
         ?int $sendBufferSize = null
-    ): int
-    {
+    ): int {
         $sendBufferSize = $sendBufferSize ?? $this->sendBufferSize;
         if ($sendBufferSize <= 0) {
             return $bodyLength;

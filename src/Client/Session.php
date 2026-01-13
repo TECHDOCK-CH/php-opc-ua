@@ -20,7 +20,6 @@ use TechDock\OpcUa\Core\Messages\CloseSessionRequest;
 use TechDock\OpcUa\Core\Messages\CloseSessionResponse;
 use TechDock\OpcUa\Core\Messages\CreateSessionRequest;
 use TechDock\OpcUa\Core\Messages\CreateSessionResponse;
-use TechDock\OpcUa\Core\Messages\GetEndpointsResponse;
 use TechDock\OpcUa\Core\Messages\HistoryReadRequest;
 use TechDock\OpcUa\Core\Messages\HistoryReadResponse;
 use TechDock\OpcUa\Core\Messages\PublishRequest;
