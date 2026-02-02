@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-require __DIR__ . '/vendor/autoload.php';
+require __DIR__ . '/../vendor/autoload.php';
 
 use TechDock\OpcUa\Client\ClientBuilder;
 use TechDock\OpcUa\Core\Types\NodeId;
