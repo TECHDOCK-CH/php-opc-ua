@@ -191,4 +191,43 @@ final class SecureChannelCryptoTest extends TestCase
 
         $this->assertSame($plaintext, $decrypted);
     }
+
+    public function testAsymmetricSigningAndVerification(): void
+    {
+        $creds = self::generateCertificate();
+
+        $handler = new Basic256Sha256Handler();
+        $crypto = new SecureChannelCrypto($handler, MessageSecurityMode::Sign);
+        $crypto->setClientNonce(str_repeat("\xAA", 32));
+        $crypto->setServerNonceAndCertificate(str_repeat("\xBB", 32), $creds['certificateDer']);
+
+        $data = 'Test data to sign';
+
+        // Sign the data
+        $signature = $crypto->signAsymmetric($data, $creds['privateKeyPem']);
+        $this->assertNotEmpty($signature);
+
+        // Verify the signature
+        $isValid = $crypto->verifyAsymmetric($data, $signature);
+        $this->assertTrue($isValid);
+
+        // Verify that tampered data fails verification
+        $tamperedData = 'Tampered data';
+        $isValidTampered = $crypto->verifyAsymmetric($tamperedData, $signature);
+        $this->assertFalse($isValidTampered);
+    }
+
+    public function testAsymmetricSignatureLength(): void
+    {
+        $creds = self::generateCertificate();
+
+        $handler = new Basic256Sha256Handler();
+        $crypto = new SecureChannelCrypto($handler, MessageSecurityMode::SignAndEncrypt);
+        $crypto->setClientNonce(str_repeat("\xAA", 32));
+        $crypto->setServerNonceAndCertificate(str_repeat("\xBB", 32), $creds['certificateDer']);
+
+        // For 2048-bit RSA key, signature length should be 256 bytes
+        $signatureLength = $crypto->getAsymmetricSignatureLength();
+        $this->assertSame(256, $signatureLength);
+    }
 }
