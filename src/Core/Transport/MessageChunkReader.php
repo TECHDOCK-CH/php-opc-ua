@@ -73,7 +73,7 @@ final class MessageChunkReader
                     "Message exceeds max size ({$totalBytes} > {$this->maxMessageSize})"
                 );
             }
-        } while (!$header->isFinal());
+        } while (!$header->isFinal() && !$header->isAbort());
 
         return $chunks;
     }
