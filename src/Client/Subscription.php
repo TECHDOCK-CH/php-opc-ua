@@ -62,14 +62,14 @@ final class Subscription
     /**
      * Create the subscription on the server.
      */
-    public function create(?RequestHeader $requestHeader = null): void
+    public function create(): void
     {
         if ($this->created) {
             throw new RuntimeException('Subscription already created');
         }
 
         $request = CreateSubscriptionRequest::create(
-            requestHeader: $requestHeader,
+            requestHeader: RequestHeader::create(),
             requestedPublishingInterval: $this->requestedPublishingInterval,
             requestedLifetimeCount: $this->requestedLifetimeCount,
             requestedMaxKeepAliveCount: $this->requestedMaxKeepAliveCount,
@@ -121,7 +121,6 @@ final class Subscription
      */
     public function createMonitoredItems(
         array $items,
-        ?RequestHeader $requestHeader = null,
         TimestampsToReturn $timestampsToReturn = TimestampsToReturn::Both,
     ): void {
         if (!$this->created) {
@@ -146,7 +145,7 @@ final class Subscription
         $request = CreateMonitoredItemsRequest::create(
             subscriptionId: $this->subscriptionId,
             itemsToCreate: $itemsToCreate,
-            requestHeader: $requestHeader,
+            requestHeader: RequestHeader::create(),
             timestampsToReturn: $timestampsToReturn,
         );
 
@@ -171,7 +170,6 @@ final class Subscription
      * Modify subscription parameters.
      */
     public function modify(
-        ?RequestHeader $requestHeader = null,
         ?float $requestedPublishingInterval = null,
         ?int $requestedLifetimeCount = null,
         ?int $requestedMaxKeepAliveCount = null,
@@ -188,7 +186,7 @@ final class Subscription
 
         $request = ModifySubscriptionRequest::create(
             subscriptionId: $this->subscriptionId,
-            requestHeader: $requestHeader,
+            requestHeader: RequestHeader::create(),
             requestedPublishingInterval: $requestedPublishingInterval ?? $this->currentPublishingInterval,
             requestedLifetimeCount: $requestedLifetimeCount ?? $this->currentLifetimeCount,
             requestedMaxKeepAliveCount: $requestedMaxKeepAliveCount ?? $this->currentMaxKeepAliveCount,
@@ -213,7 +211,7 @@ final class Subscription
     /**
      * Delete the subscription from the server.
      */
-    public function delete(?RequestHeader $requestHeader = null): void
+    public function delete(): void
     {
         if (!$this->created) {
             return;
@@ -226,7 +224,7 @@ final class Subscription
         try {
             $request = DeleteSubscriptionsRequest::create(
                 subscriptionIds: [$this->subscriptionId],
-                requestHeader: $requestHeader,
+                requestHeader: RequestHeader::create(),
             );
 
             /** @var DeleteSubscriptionsResponse $response */

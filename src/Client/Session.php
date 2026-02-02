@@ -129,6 +129,9 @@ final class Session
         $this->authenticationToken = $response->authenticationToken;
         $this->serverNonce = $response->serverNonce;
         $this->revisedSessionTimeout = (int)$response->revisedSessionTimeout;
+
+        // Propagate auth token to SecureChannel for automatic injection (mirrors C# ClientBase)
+        $this->secureChannel->setAuthenticationToken($this->authenticationToken);
     }
 
     /**
@@ -759,7 +762,7 @@ final class Session
             priority: $priority,
         );
 
-        $subscription->create($this->createRequestHeader());
+        $subscription->create();
 
         // Track subscription
         $subscriptionId = $subscription->getSubscriptionId();
@@ -1195,7 +1198,7 @@ final class Session
         // Delete all subscriptions
         foreach ($this->subscriptions as $subscription) {
             try {
-                $subscription->delete($this->createRequestHeader());
+                $subscription->delete();
             } catch (Throwable $e) {
                 // Ignore errors during cleanup
             }
@@ -1215,6 +1218,7 @@ final class Session
         $this->isActive = false;
         $this->sessionId = null;
         $this->authenticationToken = null;
+        $this->secureChannel->setAuthenticationToken(null);
     }
 
     /**
@@ -1482,7 +1486,7 @@ final class Session
         );
     }
 
-    private function createRequestHeader(): RequestHeader
+    public function createRequestHeader(): RequestHeader
     {
         $requestHeader = RequestHeader::create();
 

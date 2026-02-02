@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace TechDock\OpcUa\Core\Security;
 
+use ReflectionProperty;
 use RuntimeException;
 use TechDock\OpcUa\Core\Encoding\BinaryDecoder;
 use TechDock\OpcUa\Core\Encoding\BinaryEncoder;
@@ -43,6 +44,9 @@ final class SecureChannel
     private ?string $serverNonce = null;
     private ?ChannelSecurityKeys $currentKeys = null;
     private ?SecurityPolicyHandlerInterface $securityHandler = null;
+
+    // Authentication token (mirrors C# ClientBase.AuthenticationToken)
+    private ?NodeId $authenticationToken = null;
 
     // Sequence number validation
     private int $lastReceivedSequenceNumber = 0;
@@ -230,6 +234,61 @@ final class SecureChannel
     public function getSelectedEndpoint(): ?EndpointDescription
     {
         return $this->selectedEndpoint;
+    }
+
+    /**
+     * Set the session's AuthenticationToken for automatic injection into service requests.
+     *
+     * Mirrors C# ClientBase.AuthenticationToken — every service request sent through
+     * this channel will automatically have the token injected if the request's
+     * RequestHeader contains a null AuthenticationToken.
+     */
+    public function setAuthenticationToken(?NodeId $authenticationToken): void
+    {
+        $this->authenticationToken = $authenticationToken;
+    }
+
+    /**
+     * Inject the stored AuthenticationToken into the encoded message body.
+     *
+     * Replaces the null-token RequestHeader bytes with a new RequestHeader
+     * containing the session's AuthenticationToken. Works at the binary level
+     * to avoid modifying readonly request objects.
+     *
+     * @return string The modified message body with auth token injected
+     */
+    private function injectAuthenticationToken(string $messageBody, RequestHeader $originalHeader): string
+    {
+        // Encode the original header to find its byte length
+        $originalEncoder = new BinaryEncoder();
+        $originalHeader->encode($originalEncoder);
+        $originalHeaderBytes = $originalEncoder->getBytes();
+
+        // Encode the new header with the auth token
+        $newHeader = new RequestHeader(
+            authenticationToken: $this->authenticationToken ?? NodeId::numeric(0, 0),
+            timestamp: $originalHeader->timestamp,
+            requestHandle: $originalHeader->requestHandle,
+            returnDiagnostics: $originalHeader->returnDiagnostics,
+            auditEntryId: $originalHeader->auditEntryId,
+            timeoutHint: $originalHeader->timeoutHint,
+            additionalHeader: $originalHeader->additionalHeader,
+        );
+        $newEncoder = new BinaryEncoder();
+        $newHeader->encode($newEncoder);
+        $newHeaderBytes = $newEncoder->getBytes();
+
+        // Find where the original header bytes start in the message body
+        // (after the TypeId, which is a NodeId — typically 4 bytes for numeric ns=0)
+        $headerOffset = strpos($messageBody, $originalHeaderBytes);
+        if ($headerOffset === false) {
+            return $messageBody;
+        }
+
+        // Splice: everything before header + new header + everything after original header
+        return substr($messageBody, 0, $headerOffset)
+            . $newHeaderBytes
+            . substr($messageBody, $headerOffset + strlen($originalHeaderBytes));
     }
 
     /**
@@ -517,6 +576,14 @@ final class SecureChannel
             $request->encode($bodyEncoder);
         }
         $messageBody = $bodyEncoder->getBytes();
+
+        // Auto-inject AuthenticationToken into encoded bytes (mirrors C# ClientBase.UpdateRequestHeader)
+        if ($this->authenticationToken !== null && property_exists($request, 'requestHeader')) {
+            $header = (new ReflectionProperty($request, 'requestHeader'))->getValue($request);
+            if ($header instanceof RequestHeader && $header->authenticationToken->isNull()) {
+                $messageBody = $this->injectAuthenticationToken($messageBody, $header);
+            }
+        }
 
         // Build symmetric security header
         $securityHeader = new SymmetricSecurityHeader(
