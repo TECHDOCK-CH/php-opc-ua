@@ -7,6 +7,8 @@ namespace TechDock\OpcUa\Core\Messages;
 use TechDock\OpcUa\Core\Encoding\BinaryDecoder;
 use TechDock\OpcUa\Core\Encoding\BinaryEncoder;
 use TechDock\OpcUa\Core\Encoding\IEncodeable;
+use TechDock\OpcUa\Core\Types\DiagnosticInfo;
+use TechDock\OpcUa\Core\Types\StatusCode;
 
 /**
  * ActivateSessionResponse - Response to ActivateSessionRequest
@@ -31,16 +33,23 @@ final readonly class ActivateSessionResponse implements IEncodeable
         $encoder->writeByteString($this->serverNonce);
 
         // Results
-        $encoder->writeUInt32(count($this->results));
+        $encoder->writeInt32(count($this->results));
         foreach ($this->results as $result) {
-            // TODO: Implement StatusCode array encoding
-            $encoder->writeUInt32(0);
+            if ($result instanceof StatusCode) {
+                $result->encode($encoder);
+            } else {
+                $encoder->writeUInt32((int)$result);
+            }
         }
 
         // Diagnostic infos
-        $encoder->writeUInt32(count($this->diagnosticInfos));
+        $encoder->writeInt32(count($this->diagnosticInfos));
         foreach ($this->diagnosticInfos as $info) {
-            $encoder->writeByte(0); // Empty diagnostic info
+            if ($info instanceof DiagnosticInfo) {
+                $info->encode($encoder);
+            } else {
+                $encoder->writeByte(0); // Empty diagnostic info fallback
+            }
         }
     }
 
@@ -50,17 +59,17 @@ final readonly class ActivateSessionResponse implements IEncodeable
         $serverNonce = $decoder->readByteString() ?? '';
 
         // Results
-        $resultCount = $decoder->readUInt32();
+        $resultCount = $decoder->readArrayLength();
         $results = [];
         for ($i = 0; $i < $resultCount; $i++) {
-            $results[] = $decoder->readUInt32();
+            $results[] = StatusCode::decode($decoder);
         }
 
         // Diagnostic infos
-        $diagnosticCount = $decoder->readUInt32();
+        $diagnosticCount = $decoder->readArrayLength();
         $diagnosticInfos = [];
         for ($i = 0; $i < $diagnosticCount; $i++) {
-            $diagnosticInfos[] = $decoder->readByte();
+            $diagnosticInfos[] = DiagnosticInfo::decode($decoder);
         }
 
         return new self(

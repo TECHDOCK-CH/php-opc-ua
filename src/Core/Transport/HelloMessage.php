@@ -48,14 +48,16 @@ final readonly class HelloMessage
             );
         }
 
-        if ($maxMessageSize < 8192) {
+        // Per OPC UA spec: 0 means unlimited, otherwise must be at least 8192
+        if ($maxMessageSize !== 0 && $maxMessageSize < 8192) {
             throw new InvalidArgumentException(
-                "Max message size must be at least 8192 bytes, got {$maxMessageSize}"
+                "Max message size must be 0 (unlimited) or at least 8192 bytes, got {$maxMessageSize}"
             );
         }
 
-        if ($maxChunkCount < 1) {
-            throw new InvalidArgumentException("Max chunk count must be at least 1, got {$maxChunkCount}");
+        // Per OPC UA spec: 0 means unlimited, otherwise must be at least 1
+        if ($maxChunkCount < 0) {
+            throw new InvalidArgumentException("Max chunk count cannot be negative, got {$maxChunkCount}");
         }
 
         if ($endpointUrl === '') {

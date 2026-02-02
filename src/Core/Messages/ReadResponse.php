@@ -50,13 +50,13 @@ final readonly class ReadResponse implements IEncodeable, ServiceResponse
     {
         $responseHeader = ResponseHeader::decode($decoder);
 
-        $resultCount = $decoder->readInt32();
+        $resultCount = $decoder->readArrayLength();
         $results = [];
         for ($i = 0; $i < $resultCount; $i++) {
             $results[] = DataValue::decode($decoder);
         }
 
-        $diagnosticCount = $decoder->readInt32();
+        $diagnosticCount = $decoder->readArrayLength();
         $diagnosticInfos = [];
         for ($i = 0; $i < $diagnosticCount; $i++) {
             $diagnosticInfos[] = DiagnosticInfo::decode($decoder);

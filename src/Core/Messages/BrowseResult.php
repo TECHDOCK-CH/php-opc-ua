@@ -29,7 +29,7 @@ final readonly class BrowseResult implements IEncodeable
         $this->statusCode->encode($encoder);
         $encoder->writeByteString($this->continuationPoint);
 
-        $encoder->writeUInt32(count($this->references));
+        $encoder->writeInt32(count($this->references));
         foreach ($this->references as $ref) {
             $ref->encode($encoder);
         }
@@ -40,7 +40,7 @@ final readonly class BrowseResult implements IEncodeable
         $statusCode = StatusCode::decode($decoder);
         $continuationPoint = $decoder->readByteString();
 
-        $count = $decoder->readUInt32();
+        $count = $decoder->readArrayLength();
         $references = [];
         for ($i = 0; $i < $count; $i++) {
             $references[] = ReferenceDescription::decode($decoder);

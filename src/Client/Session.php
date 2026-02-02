@@ -20,6 +20,8 @@ use TechDock\OpcUa\Core\Messages\CloseSessionRequest;
 use TechDock\OpcUa\Core\Messages\CloseSessionResponse;
 use TechDock\OpcUa\Core\Messages\CreateSessionRequest;
 use TechDock\OpcUa\Core\Messages\CreateSessionResponse;
+use TechDock\OpcUa\Core\Messages\HistoryReadRequest;
+use TechDock\OpcUa\Core\Messages\HistoryReadResponse;
 use TechDock\OpcUa\Core\Messages\PublishRequest;
 use TechDock\OpcUa\Core\Messages\PublishResponse;
 use TechDock\OpcUa\Core\Messages\ReadRequest;
@@ -40,7 +42,10 @@ use TechDock\OpcUa\Core\Types\BrowsePathResult;
 use TechDock\OpcUa\Core\Types\CallMethodRequest;
 use TechDock\OpcUa\Core\Types\CallMethodResult;
 use TechDock\OpcUa\Core\Types\DataValue;
+use TechDock\OpcUa\Core\Types\HistoryReadResult;
+use TechDock\OpcUa\Core\Types\HistoryReadValueId;
 use TechDock\OpcUa\Core\Types\NodeId;
+use TechDock\OpcUa\Core\Types\ReadRawModifiedDetails;
 use TechDock\OpcUa\Core\Types\ReadValueId;
 use TechDock\OpcUa\Core\Types\StatusCode;
 use TechDock\OpcUa\Core\Types\SubscriptionAcknowledgement;
@@ -554,6 +559,58 @@ final class Session
         }
 
         return $result->outputArguments;
+    }
+
+    /**
+     * Read historical data for a node.
+     *
+     * @param NodeId $nodeId The node to read history for
+     * @param ReadRawModifiedDetails $details The read details (time range, etc.)
+     * @param TimestampsToReturn $timestampsToReturn Which timestamps to return
+     * @return HistoryReadResult The history read result
+     */
+    public function readHistory(
+        NodeId $nodeId,
+        ReadRawModifiedDetails $details,
+        TimestampsToReturn $timestampsToReturn = TimestampsToReturn::Both,
+    ): HistoryReadResult {
+        if (!$this->isActive) {
+            throw new RuntimeException('Session must be activated before reading history');
+        }
+
+        $nodeToRead = new HistoryReadValueId(
+            nodeId: $nodeId,
+            indexRange: null,
+            dataEncoding: null,
+            continuationPoint: null
+        );
+
+        $request = HistoryReadRequest::forRawData(
+            details: $details,
+            nodesToRead: [$nodeToRead],
+            timestampsToReturn: $timestampsToReturn
+        );
+
+        /** @var HistoryReadResponse $response */
+        $response = $this->secureChannel->sendServiceRequest($request, HistoryReadResponse::class);
+
+        if (!$response->responseHeader->serviceResult->isGood()) {
+            throw new RuntimeException(
+                "HistoryRead failed: {$response->responseHeader->serviceResult}"
+            );
+        }
+
+        if ($response->results === []) {
+            throw new RuntimeException('Server returned empty history results');
+        }
+
+        $result = $response->results[0];
+
+        if (!$result->statusCode->isGood()) {
+            throw new RuntimeException("HistoryRead result bad: {$result->statusCode}");
+        }
+
+        return $result;
     }
 
     /**

@@ -7,6 +7,7 @@ namespace TechDock\OpcUa\Core\Messages;
 use TechDock\OpcUa\Core\Encoding\BinaryDecoder;
 use TechDock\OpcUa\Core\Encoding\BinaryEncoder;
 use TechDock\OpcUa\Core\Encoding\IEncodeable;
+use TechDock\OpcUa\Core\Types\DiagnosticInfo;
 
 /**
  * BrowseNextResponse - Response to a BrowseNext request
@@ -28,15 +29,14 @@ final readonly class BrowseNextResponse implements IEncodeable
     {
         $this->responseHeader->encode($encoder);
 
-        $encoder->writeUInt32(count($this->results));
+        $encoder->writeInt32(count($this->results));
         foreach ($this->results as $result) {
             $result->encode($encoder);
         }
 
-        $encoder->writeUInt32(count($this->diagnosticInfos));
+        $encoder->writeInt32(count($this->diagnosticInfos));
         foreach ($this->diagnosticInfos as $diagnosticInfo) {
-            // TODO: Implement DiagnosticInfo encoding
-            $encoder->writeByte(0); // Empty diagnostic info for now
+            $diagnosticInfo->encode($encoder);
         }
     }
 
@@ -44,17 +44,16 @@ final readonly class BrowseNextResponse implements IEncodeable
     {
         $responseHeader = ResponseHeader::decode($decoder);
 
-        $resultCount = $decoder->readUInt32();
+        $resultCount = $decoder->readArrayLength();
         $results = [];
         for ($i = 0; $i < $resultCount; $i++) {
             $results[] = BrowseResult::decode($decoder);
         }
 
-        $diagnosticCount = $decoder->readUInt32();
+        $diagnosticCount = $decoder->readArrayLength();
         $diagnosticInfos = [];
         for ($i = 0; $i < $diagnosticCount; $i++) {
-            // TODO: Implement DiagnosticInfo decoding
-            $decoder->readByte(); // Skip empty diagnostic info for now
+            $diagnosticInfos[] = DiagnosticInfo::decode($decoder);
         }
 
         return new self(

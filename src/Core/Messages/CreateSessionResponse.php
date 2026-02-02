@@ -47,7 +47,7 @@ final readonly class CreateSessionResponse implements IEncodeable, ServiceRespon
         $encoder->writeByteString($this->serverCertificate);
 
         // Server endpoints array
-        $encoder->writeUInt32(count($this->serverEndpoints));
+        $encoder->writeInt32(count($this->serverEndpoints));
         foreach ($this->serverEndpoints as $endpoint) {
             if ($endpoint instanceof EndpointDescription) {
                 $endpoint->encode($encoder);
@@ -55,7 +55,7 @@ final readonly class CreateSessionResponse implements IEncodeable, ServiceRespon
         }
 
         // Server software certificates
-        $encoder->writeUInt32(count($this->serverSoftwareCertificates));
+        $encoder->writeInt32(count($this->serverSoftwareCertificates));
         foreach ($this->serverSoftwareCertificates as $certificate) {
             if ($certificate instanceof SignedSoftwareCertificate) {
                 $certificate->encode($encoder);
@@ -84,14 +84,14 @@ final readonly class CreateSessionResponse implements IEncodeable, ServiceRespon
         $serverCertificate = $decoder->readByteString();
 
         // Server endpoints
-        $endpointCount = $decoder->readUInt32();
+        $endpointCount = $decoder->readArrayLength();
         $serverEndpoints = [];
         for ($i = 0; $i < $endpointCount; $i++) {
             $serverEndpoints[] = EndpointDescription::decode($decoder);
         }
 
         // Server software certificates
-        $certCount = $decoder->readUInt32();
+        $certCount = $decoder->readArrayLength();
         $serverSoftwareCertificates = [];
         for ($i = 0; $i < $certCount; $i++) {
             $serverSoftwareCertificates[] = SignedSoftwareCertificate::decode($decoder);

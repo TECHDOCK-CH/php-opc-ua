@@ -18,6 +18,7 @@ use TechDock\OpcUa\Core\Messages\ServiceFault;
 use TechDock\OpcUa\Core\Transport\AcknowledgeMessage;
 use TechDock\OpcUa\Core\Transport\ErrorMessage;
 use TechDock\OpcUa\Core\Transport\HelloMessage;
+use TechDock\OpcUa\Core\Transport\MessageChunkReader;
 use TechDock\OpcUa\Core\Transport\MessageHeader;
 use TechDock\OpcUa\Core\Transport\MessageType;
 use TechDock\OpcUa\Core\Transport\TcpConnectionInterface;
@@ -46,6 +47,11 @@ final class SecureChannel
     // Sequence number validation
     private int $lastReceivedSequenceNumber = 0;
     private bool $sequenceNumberRolledOver = false;
+
+    private int $receiveBufferSize = 0;
+    private int $sendBufferSize = 0;
+    private int $maxMessageSize = 0;
+    private int $maxChunkCount = 0;
 
     public function __construct(
         private readonly TcpConnectionInterface $connection,
@@ -94,6 +100,10 @@ final class SecureChannel
         $header->encode($headerEncoder);
         $decoder = new BinaryDecoder($headerEncoder->getBytes() . $payload);
         $ack = AcknowledgeMessage::decode($decoder);
+        $this->receiveBufferSize = $ack->receiveBufferSize;
+        $this->sendBufferSize = $ack->sendBufferSize;
+        $this->maxMessageSize = $ack->maxMessageSize;
+        $this->maxChunkCount = $ack->maxChunkCount;
 
         // Step 4: Send OpenSecureChannelRequest wrapped in OPN message (BEFORE GetEndpoints!)
         // Generate client nonce only when security mode is not None
@@ -385,30 +395,14 @@ final class SecureChannel
         $securityHeader->encode($securityHeaderEncoder);
         $securityHeaderBytes = $securityHeaderEncoder->getBytes();
 
-        // Build sequence header
-        $sequenceHeader = new SequenceHeader(
-            sequenceNumber: $this->nextSequenceNumber(),
-            requestId: $this->nextRequestId()
+        $requestId = $this->nextRequestId();
+
+        $this->sendAsymmetricRequestChunks(
+            $securityHeaderBytes,
+            $messageBody,
+            MessageType::OpenSecureChannel,
+            $requestId
         );
-        $sequenceHeaderEncoder = new BinaryEncoder();
-        $sequenceHeader->encode($sequenceHeaderEncoder);
-        $sequenceHeaderBytes = $sequenceHeaderEncoder->getBytes();
-
-        // Calculate total message size (Header 8 bytes + Security Header + Sequence Header + Body)
-        $messageSize = MessageHeader::HEADER_SIZE
-            + strlen($securityHeaderBytes)
-            + strlen($sequenceHeaderBytes)
-            + strlen($messageBody);
-
-        // Build message header
-        $messageHeader = MessageHeader::final(MessageType::OpenSecureChannel, $messageSize);
-        $headerEncoder = new BinaryEncoder();
-        $messageHeader->encode($headerEncoder);
-        $headerBytes = $headerEncoder->getBytes();
-
-        // Send complete message
-        $completeMessage = $headerBytes . $securityHeaderBytes . $sequenceHeaderBytes . $messageBody;
-        $this->connection->send($completeMessage);
     }
 
     /**
@@ -416,33 +410,35 @@ final class SecureChannel
      */
     private function receiveOpenSecureChannelResponse(): OpenSecureChannelResponse
     {
-        // Receive message header
-        $header = $this->connection->receiveHeader();
+        $chunkReader = new MessageChunkReader(
+            $this->connection,
+            $this->receiveBufferSize,
+            $this->maxMessageSize,
+            $this->maxChunkCount
+        );
+        $chunks = $chunkReader->read(MessageType::OpenSecureChannel);
 
-        if ($header->messageType === MessageType::Error) {
-            $payload = $this->connection->receive($header->getPayloadSize());
-            $headerEncoder = new BinaryEncoder();
-            $header->encode($headerEncoder);
-            $decoder = new BinaryDecoder($headerEncoder->getBytes() . $payload);
-            $error = ErrorMessage::decode($decoder);
-            throw new RuntimeException("Server returned error: {$error->reason}");
+        $assembledBody = '';
+        $expectedRequestId = null;
+
+        foreach ($chunks as $chunk) {
+            if ($chunk->header->isAbort()) {
+                throw new RuntimeException('Server aborted the open secure channel response');
+            }
+
+            [$requestId, $sequenceNumber, $bodyChunk] = $this->decodeAsymmetricChunk($chunk->payload);
+
+            if ($expectedRequestId === null) {
+                $expectedRequestId = $requestId;
+            } elseif ($requestId !== $expectedRequestId) {
+                throw new RuntimeException('Mismatched requestId in open secure channel response chunks');
+            }
+
+            $this->validateSequenceNumber($sequenceNumber);
+            $assembledBody .= $bodyChunk;
         }
 
-        if ($header->messageType !== MessageType::OpenSecureChannel) {
-            throw new RuntimeException("Expected OPN response, got {$header->messageType->value}");
-        }
-
-        // Receive payload
-        $payload = $this->connection->receive($header->getPayloadSize());
-
-        // Decode the response
-        $decoder = new BinaryDecoder($payload);
-
-        // Decode asymmetric security header
-        $securityHeader = AsymmetricSecurityHeader::decode($decoder);
-
-        // Decode sequence header
-        $sequenceHeader = SequenceHeader::decode($decoder);
+        $decoder = new BinaryDecoder($assembledBody);
 
         // Decode TypeId
         $typeId = NodeId::decode($decoder);
@@ -531,78 +527,252 @@ final class SecureChannel
         $securityHeader->encode($securityHeaderEncoder);
         $securityHeaderBytes = $securityHeaderEncoder->getBytes();
 
-        // Build sequence header
-        $sequenceHeader = new SequenceHeader(
-            sequenceNumber: $this->nextSequenceNumber(),
-            requestId: $this->nextRequestId()
+        $requestId = $this->nextRequestId();
+        $this->sendSymmetricRequestChunks($securityHeaderBytes, $messageBody, $requestId);
+
+        // Receive response
+        return $this->receiveServiceResponse($responseClass);
+    }
+
+    /**
+     * Send a service request as one or more symmetric chunks.
+     */
+    private function sendSymmetricRequestChunks(string $securityHeaderBytes, string $messageBody, int $requestId): void
+    {
+        $bodyLength = strlen($messageBody);
+        $effectiveSendBufferSize = $this->sendBufferSize;
+        if ($this->maxMessageSize > 0) {
+            $effectiveSendBufferSize = $effectiveSendBufferSize > 0
+                ? min($effectiveSendBufferSize, $this->maxMessageSize)
+                : $this->maxMessageSize;
+        }
+
+        $maxChunkBodySize = $this->calculateMaxChunkBodySize(
+            strlen($securityHeaderBytes),
+            $bodyLength,
+            $effectiveSendBufferSize
         );
-        $sequenceHeaderEncoder = new BinaryEncoder();
-        $sequenceHeader->encode($sequenceHeaderEncoder);
-        $sequenceHeaderBytes = $sequenceHeaderEncoder->getBytes();
+        if ($bodyLength > 0 && $maxChunkBodySize <= 0) {
+            throw new RuntimeException('Send buffer too small for request payload');
+        }
 
-        // === ENCRYPTION LOGIC ===
-        $messagePayload = '';
+        $chunkBodies = $bodyLength === 0
+            ? ['']
+            : $this->splitMessageBody($messageBody, $maxChunkBodySize);
 
-        if (
-            $this->securityMode === MessageSecurityMode::SignAndEncrypt
-            || $this->securityMode === MessageSecurityMode::Sign
-        ) {
-            // We have encryption enabled - encrypt and/or sign the message
-            if ($this->securityHandler === null || $this->currentKeys === null) {
-                throw new RuntimeException('Security handler and keys must be initialized for secure messaging');
-            }
+        $chunkCount = count($chunkBodies);
+        if ($this->maxChunkCount > 0 && $chunkCount > $this->maxChunkCount) {
+            throw new RuntimeException(
+                "Request exceeds max chunk count ({$chunkCount} > {$this->maxChunkCount})"
+            );
+        }
 
-            // Plaintext to encrypt: SequenceHeader + Body
-            $plaintextToEncrypt = $sequenceHeaderBytes . $messageBody;
+        foreach ($chunkBodies as $index => $chunkBody) {
+            $sequenceHeader = new SequenceHeader(
+                sequenceNumber: $this->nextSequenceNumber(),
+                requestId: $requestId
+            );
+            $sequenceHeaderEncoder = new BinaryEncoder();
+            $sequenceHeader->encode($sequenceHeaderEncoder);
+            $sequenceHeaderBytes = $sequenceHeaderEncoder->getBytes();
 
-            // Add OPC UA padding
-            $blockSize = $this->securityHandler->getSymmetricBlockSize();
-            $paddedPlaintext = OpcUaPadding::addSymmetric($plaintextToEncrypt, $blockSize);
+            $payload = $this->buildSymmetricChunkPayload(
+                $securityHeaderBytes,
+                $sequenceHeaderBytes,
+                $chunkBody
+            );
 
-            // Encrypt if required (SignAndEncrypt mode)
-            if ($this->securityMode === MessageSecurityMode::SignAndEncrypt) {
-                $encryptedPayload = $this->securityHandler->encryptSymmetric(
-                    $paddedPlaintext,
-                    $this->currentKeys->clientEncryptionKey,
-                    $this->currentKeys->clientIV
+            $messageSize = MessageHeader::HEADER_SIZE + strlen($payload);
+            if ($this->maxMessageSize > 0 && $messageSize > $this->maxMessageSize) {
+                throw new RuntimeException(
+                    "Request chunk exceeds max message size ({$messageSize} > {$this->maxMessageSize})"
                 );
-            } else {
-                // Sign-only mode: no encryption, but still need padding
-                $encryptedPayload = $paddedPlaintext;
+            }
+            $messageHeader = ($index === $chunkCount - 1)
+                ? MessageHeader::final(MessageType::Message, $messageSize)
+                : MessageHeader::intermediate(MessageType::Message, $messageSize);
+            $headerEncoder = new BinaryEncoder();
+            $messageHeader->encode($headerEncoder);
+
+            $this->connection->send($headerEncoder->getBytes() . $payload);
+        }
+    }
+
+    /**
+     * Send an asymmetric message (OPN) as one or more chunks.
+     */
+    private function sendAsymmetricRequestChunks(
+        string $securityHeaderBytes,
+        string $messageBody,
+        MessageType $messageType,
+        int $requestId
+    ): void {
+        $bodyLength = strlen($messageBody);
+        $effectiveSendBufferSize = $this->sendBufferSize;
+        if ($this->maxMessageSize > 0) {
+            $effectiveSendBufferSize = $effectiveSendBufferSize > 0
+                ? min($effectiveSendBufferSize, $this->maxMessageSize)
+                : $this->maxMessageSize;
+        }
+
+        $maxPayloadSize = $effectiveSendBufferSize > 0
+            ? $effectiveSendBufferSize - MessageHeader::HEADER_SIZE - strlen($securityHeaderBytes)
+            : $bodyLength + 8;
+
+        $sequenceHeaderSize = 8;
+        $maxChunkBodySize = $maxPayloadSize - $sequenceHeaderSize;
+
+        if ($bodyLength > 0 && $maxChunkBodySize <= 0) {
+            throw new RuntimeException('Send buffer too small for open secure channel payload');
+        }
+
+        $chunkBodies = $bodyLength === 0
+            ? ['']
+            : $this->splitMessageBody($messageBody, $maxChunkBodySize);
+
+        $chunkCount = count($chunkBodies);
+        if ($this->maxChunkCount > 0 && $chunkCount > $this->maxChunkCount) {
+            throw new RuntimeException(
+                "Request exceeds max chunk count ({$chunkCount} > {$this->maxChunkCount})"
+            );
+        }
+
+        foreach ($chunkBodies as $index => $chunkBody) {
+            $sequenceHeader = new SequenceHeader(
+                sequenceNumber: $this->nextSequenceNumber(),
+                requestId: $requestId
+            );
+            $sequenceHeaderEncoder = new BinaryEncoder();
+            $sequenceHeader->encode($sequenceHeaderEncoder);
+            $sequenceHeaderBytes = $sequenceHeaderEncoder->getBytes();
+
+            $payload = $securityHeaderBytes . $sequenceHeaderBytes . $chunkBody;
+            $messageSize = MessageHeader::HEADER_SIZE + strlen($payload);
+            if ($this->maxMessageSize > 0 && $messageSize > $this->maxMessageSize) {
+                throw new RuntimeException(
+                    "Request chunk exceeds max message size ({$messageSize} > {$this->maxMessageSize})"
+                );
             }
 
-            // Sign: SecurityHeader + EncryptedPayload
-            // Note: Signature is NOT encrypted (appended after ciphertext)
+            $messageHeader = ($index === $chunkCount - 1)
+                ? MessageHeader::final($messageType, $messageSize)
+                : MessageHeader::intermediate($messageType, $messageSize);
+            $headerEncoder = new BinaryEncoder();
+            $messageHeader->encode($headerEncoder);
+
+            $this->connection->send($headerEncoder->getBytes() . $payload);
+        }
+    }
+
+    /**
+     * Build a single symmetric chunk payload (security header + data/signature).
+     */
+    private function buildSymmetricChunkPayload(
+        string $securityHeaderBytes,
+        string $sequenceHeaderBytes,
+        string $chunkBody
+    ): string {
+        $plaintext = $sequenceHeaderBytes . $chunkBody;
+
+        if ($this->securityMode === MessageSecurityMode::None) {
+            return $securityHeaderBytes . $plaintext;
+        }
+
+        if ($this->securityHandler === null || $this->currentKeys === null) {
+            throw new RuntimeException('Security handler and keys must be initialized for secure messaging');
+        }
+
+        if ($this->securityMode === MessageSecurityMode::SignAndEncrypt) {
+            $blockSize = $this->securityHandler->getSymmetricBlockSize();
+            $paddedPlaintext = OpcUaPadding::addSymmetric($plaintext, $blockSize);
+            $encryptedPayload = $this->securityHandler->encryptSymmetric(
+                $paddedPlaintext,
+                $this->currentKeys->clientEncryptionKey,
+                $this->currentKeys->clientIV
+            );
             $dataToSign = $securityHeaderBytes . $encryptedPayload;
             $signatureBytes = $this->securityHandler->signSymmetric(
                 $dataToSign,
                 $this->currentKeys->clientSigningKey
             );
-
-            // Payload = EncryptedData + Signature
-            $messagePayload = $encryptedPayload . $signatureBytes;
-        } else {
-            // No security: plaintext message (SecurityMode::None)
-            $messagePayload = $sequenceHeaderBytes . $messageBody;
+            return $securityHeaderBytes . $encryptedPayload . $signatureBytes;
         }
 
-        // Calculate total message size
-        $messageSize = MessageHeader::HEADER_SIZE
-            + strlen($securityHeaderBytes)
-            + strlen($messagePayload);
+        $dataToSign = $securityHeaderBytes . $plaintext;
+        $signatureBytes = $this->securityHandler->signSymmetric(
+            $dataToSign,
+            $this->currentKeys->clientSigningKey
+        );
 
-        // Build message header
-        $messageHeader = MessageHeader::final(MessageType::Message, $messageSize);
-        $headerEncoder = new BinaryEncoder();
-        $messageHeader->encode($headerEncoder);
-        $headerBytes = $headerEncoder->getBytes();
+        return $securityHeaderBytes . $plaintext . $signatureBytes;
+    }
 
-        // Send complete message
-        $completeMessage = $headerBytes . $securityHeaderBytes . $messagePayload;
-        $this->connection->send($completeMessage);
+    /**
+     * Calculate the maximum request body size per chunk.
+     */
+    private function calculateMaxChunkBodySize(
+        int $securityHeaderLength,
+        int $bodyLength,
+        ?int $sendBufferSize = null
+    ): int {
+        $sendBufferSize = $sendBufferSize ?? $this->sendBufferSize;
+        if ($sendBufferSize <= 0) {
+            return $bodyLength;
+        }
 
-        // Receive response
-        return $this->receiveServiceResponse($responseClass);
+        $maxPayloadSize = $sendBufferSize - MessageHeader::HEADER_SIZE - $securityHeaderLength;
+        if ($maxPayloadSize <= 0) {
+            return 0;
+        }
+
+        $sequenceHeaderSize = 8;
+
+        if ($this->securityMode === MessageSecurityMode::None) {
+            return $maxPayloadSize - $sequenceHeaderSize;
+        }
+
+        if ($this->securityHandler === null) {
+            return 0;
+        }
+
+        $signatureLength = $this->securityHandler->getSymmetricSignatureLength();
+
+        if ($this->securityMode === MessageSecurityMode::Sign) {
+            return $maxPayloadSize - $sequenceHeaderSize - $signatureLength;
+        }
+
+        $maxPlaintextSize = $maxPayloadSize - $signatureLength;
+        $blockSize = $this->securityHandler->getSymmetricBlockSize();
+        $maxDataLength = $maxPlaintextSize;
+
+        while ($maxDataLength > 0) {
+            $paddingLength = OpcUaPadding::calculatePaddingLength($maxDataLength, $blockSize);
+            if ($maxDataLength + $paddingLength <= $maxPlaintextSize) {
+                return $maxDataLength - $sequenceHeaderSize;
+            }
+            $maxDataLength--;
+        }
+
+        return 0;
+    }
+
+    /**
+     * Split a binary message body into chunk-sized pieces.
+     *
+     * @return string[]
+     */
+    private function splitMessageBody(string $messageBody, int $chunkSize): array
+    {
+        $chunks = [];
+        $offset = 0;
+        $length = strlen($messageBody);
+
+        while ($offset < $length) {
+            $chunks[] = substr($messageBody, $offset, $chunkSize);
+            $offset += $chunkSize;
+        }
+
+        return $chunks;
     }
 
     /**
@@ -614,105 +784,35 @@ final class SecureChannel
      */
     private function receiveServiceResponse(string $responseClass): object
     {
-        // Receive message header
-        $header = $this->connection->receiveHeader();
+        $chunkReader = new MessageChunkReader(
+            $this->connection,
+            $this->receiveBufferSize,
+            $this->maxMessageSize,
+            $this->maxChunkCount
+        );
+        $chunks = $chunkReader->read(MessageType::Message);
 
-        if ($header->messageType === MessageType::Error) {
-            $payload = $this->connection->receive($header->getPayloadSize());
-            $headerEncoder = new BinaryEncoder();
-            $header->encode($headerEncoder);
-            $decoder = new BinaryDecoder($headerEncoder->getBytes() . $payload);
-            $error = ErrorMessage::decode($decoder);
-            throw new RuntimeException("Server returned error: {$error->reason}");
+        $assembledBody = '';
+        $expectedRequestId = null;
+
+        foreach ($chunks as $chunk) {
+            if ($chunk->header->isAbort()) {
+                throw new RuntimeException('Server aborted the response message');
+            }
+
+            [$requestId, $sequenceNumber, $bodyChunk] = $this->decodeSymmetricChunk($chunk->payload);
+
+            if ($expectedRequestId === null) {
+                $expectedRequestId = $requestId;
+            } elseif ($requestId !== $expectedRequestId) {
+                throw new RuntimeException('Mismatched requestId in response chunks');
+            }
+
+            $this->validateSequenceNumber($sequenceNumber);
+            $assembledBody .= $bodyChunk;
         }
 
-        if ($header->messageType !== MessageType::Message) {
-            throw new RuntimeException("Expected MSG response, got {$header->messageType->value}");
-        }
-
-        // Receive payload
-        $payload = $this->connection->receive($header->getPayloadSize());
-
-        // Decode the response
-        $decoder = new BinaryDecoder($payload);
-
-        // Decode symmetric security header
-        $securityHeader = SymmetricSecurityHeader::decode($decoder);
-
-        // === DECRYPTION LOGIC ===
-        if (
-            $this->securityMode === MessageSecurityMode::SignAndEncrypt
-            || $this->securityMode === MessageSecurityMode::Sign
-        ) {
-            // We have encryption enabled - verify signature and decrypt
-            if ($this->securityHandler === null || $this->currentKeys === null) {
-                throw new RuntimeException('Security handler and keys must be initialized for secure messaging');
-            }
-
-            // Calculate signature position (at the end of the payload)
-            $signatureLength = $this->securityHandler->getSymmetricSignatureLength();
-            $remainingPayloadLength = strlen($payload) - $decoder->getPosition();
-            $encryptedPayloadLength = $remainingPayloadLength - $signatureLength;
-
-            if ($encryptedPayloadLength < 0) {
-                throw new RuntimeException(
-                    "Invalid message: payload too short for signature " .
-                    "(expected signature: {$signatureLength} bytes, remaining: {$remainingPayloadLength} bytes)"
-                );
-            }
-
-            // Extract encrypted payload and signature
-            $encryptedPayload = $decoder->readBytes($encryptedPayloadLength);
-            $receivedSignature = $decoder->readBytes($signatureLength);
-
-            // Verify signature BEFORE decryption (fail fast if tampered)
-            $securityHeaderEncoder = new BinaryEncoder();
-            $securityHeader->encode($securityHeaderEncoder);
-            $securityHeaderBytes = $securityHeaderEncoder->getBytes();
-
-            $dataToVerify = $securityHeaderBytes . $encryptedPayload;
-            $isValid = $this->securityHandler->verifySymmetric(
-                $dataToVerify,
-                $receivedSignature,
-                $this->currentKeys->serverSigningKey
-            );
-
-            if (!$isValid) {
-                throw new RuntimeException(
-                    'Message signature verification failed - possible tampering or wrong keys'
-                );
-            }
-
-            // Decrypt if message was encrypted (SignAndEncrypt mode)
-            if ($this->securityMode === MessageSecurityMode::SignAndEncrypt) {
-                $paddedPlaintext = $this->securityHandler->decryptSymmetric(
-                    $encryptedPayload,
-                    $this->currentKeys->serverEncryptionKey,
-                    $this->currentKeys->serverIV
-                );
-            } else {
-                // Sign-only mode: payload is not encrypted, just signed
-                $paddedPlaintext = $encryptedPayload;
-            }
-
-            // Remove OPC UA padding
-            try {
-                $plaintext = OpcUaPadding::removeSymmetric($paddedPlaintext);
-            } catch (RuntimeException $e) {
-                throw new RuntimeException(
-                    "Failed to remove padding from decrypted message: {$e->getMessage()}"
-                );
-            }
-
-            // Create new decoder for plaintext (SequenceHeader + Body)
-            $decoder = new BinaryDecoder($plaintext);
-        }
-
-        // Decode sequence header
-        $sequenceHeader = SequenceHeader::decode($decoder);
-
-        // Validate sequence number (prevents replay attacks)
-        $this->validateSequenceNumber($sequenceHeader->sequenceNumber);
+        $decoder = new BinaryDecoder($assembledBody);
 
         // Decode TypeId
         $typeId = NodeId::decode($decoder);
@@ -731,6 +831,90 @@ final class SecureChannel
         }
 
         return $responseClass::decode($decoder);
+    }
+
+    /**
+     * Decode a symmetric response chunk and return its body.
+     *
+     * @return array{0:int,1:int,2:string} requestId, sequenceNumber, bodyChunk
+     */
+    private function decodeSymmetricChunk(string $payload): array
+    {
+        $decoder = new BinaryDecoder($payload);
+        $securityHeader = SymmetricSecurityHeader::decode($decoder);
+
+        $chunkPayload = substr($payload, $decoder->getPosition());
+
+        if ($this->securityMode === MessageSecurityMode::None) {
+            $plaintext = $chunkPayload;
+        } else {
+            if ($this->securityHandler === null || $this->currentKeys === null) {
+                throw new RuntimeException('Security handler and keys must be initialized for secure messaging');
+            }
+
+            $signatureLength = $this->securityHandler->getSymmetricSignatureLength();
+            if (strlen($chunkPayload) < $signatureLength) {
+                throw new RuntimeException('Invalid message: payload too short for signature');
+            }
+
+            $signedPayload = substr($chunkPayload, 0, -$signatureLength);
+            $receivedSignature = substr($chunkPayload, -$signatureLength);
+
+            $securityHeaderEncoder = new BinaryEncoder();
+            $securityHeader->encode($securityHeaderEncoder);
+            $securityHeaderBytes = $securityHeaderEncoder->getBytes();
+
+            $dataToVerify = $securityHeaderBytes . $signedPayload;
+            $isValid = $this->securityHandler->verifySymmetric(
+                $dataToVerify,
+                $receivedSignature,
+                $this->currentKeys->serverSigningKey
+            );
+
+            if (!$isValid) {
+                throw new RuntimeException('Message signature verification failed');
+            }
+
+            if ($this->securityMode === MessageSecurityMode::SignAndEncrypt) {
+                $paddedPlaintext = $this->securityHandler->decryptSymmetric(
+                    $signedPayload,
+                    $this->currentKeys->serverEncryptionKey,
+                    $this->currentKeys->serverIV
+                );
+
+                try {
+                    $plaintext = OpcUaPadding::removeSymmetric($paddedPlaintext);
+                } catch (RuntimeException $e) {
+                    throw new RuntimeException(
+                        "Failed to remove padding from decrypted message: {$e->getMessage()}"
+                    );
+                }
+            } else {
+                $plaintext = $signedPayload;
+            }
+        }
+
+        $chunkDecoder = new BinaryDecoder($plaintext);
+        $sequenceHeader = SequenceHeader::decode($chunkDecoder);
+        $body = substr($plaintext, $chunkDecoder->getPosition());
+
+        return [$sequenceHeader->requestId, $sequenceHeader->sequenceNumber, $body];
+    }
+
+    /**
+     * Decode an asymmetric response chunk and return its body.
+     *
+     * @return array{0:int,1:int,2:string} requestId, sequenceNumber, bodyChunk
+     */
+    private function decodeAsymmetricChunk(string $payload): array
+    {
+        $decoder = new BinaryDecoder($payload);
+        AsymmetricSecurityHeader::decode($decoder);
+
+        $sequenceHeader = SequenceHeader::decode($decoder);
+        $body = substr($payload, $decoder->getPosition());
+
+        return [$sequenceHeader->requestId, $sequenceHeader->sequenceNumber, $body];
     }
 
     /**

@@ -29,8 +29,8 @@ try {
     echo "   Connected: " . ($client1->isConnected() ? 'YES' : 'NO') . "\n";
 
     // Read a value
-    $currentTime = $client1->session->read(NodeId::numeric(0, 2258));
-    echo "   Server time: {$currentTime->value}\n";
+    $currentTime = $client1->session->read([NodeId::numeric(0, 2258)]);
+    echo "   Server time: {$currentTime[0]->value}\n";
 
     $client1->disconnect();
     echo "   Disconnected\n\n";
@@ -45,10 +45,8 @@ try {
         ->endpoint($serverUrl)
         ->application('My Industrial App', 'urn:mycompany:industrial-app')
         ->withAnonymousAuth()
-        ->withCache(maxSize: 1000, ttl: 300.0)
+        ->withCache(maxSize: 1000)
         ->withAutoBatching()
-        ->operationTimeout(30000)
-        ->sessionTimeout(60000)
         ->build();
 
     echo "   Connected: " . ($client2->isConnected() ? 'YES' : 'NO') . "\n";
@@ -106,7 +104,7 @@ try {
     // Show available endpoints
     foreach ($testResult['endpoints'] as $i => $endpoint) {
         $securityMode = $endpoint->securityMode->name;
-        $securityPolicy = basename($endpoint->securityPolicyUri);
+        $securityPolicy = basename($endpoint->securityPolicy->uri());
         echo "     Endpoint " . ($i + 1) . ": $securityMode / $securityPolicy\n";
     }
 
@@ -145,11 +143,8 @@ echo "       ->application('Production App', 'urn:company:prod-app')\n";
 echo "       ->withAutoDiscovery()              // Auto-select best endpoint\n";
 echo "       ->preferSecurityMode(SignAndEncrypt) // Require encryption\n";
 echo "       ->withUsernameAuth(\$user, \$pass)   // Authenticated access\n";
-echo "       ->withCache(5000, 600.0)           // Large cache, 10 min TTL\n";
+echo "       ->withCache(5000)                  // Large cache\n";
 echo "       ->withAutoBatching()               // Handle large operations\n";
-echo "       ->operationTimeout(60000)          // 60s timeout\n";
-echo "       ->sessionTimeout(300000)           // 5 min session timeout\n";
-echo "       ->withLogger(\$logger)              // PSR-3 logger\n";
 echo "       ->build();\n";
 echo "\n";
 

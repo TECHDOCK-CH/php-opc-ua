@@ -67,7 +67,7 @@ final readonly class BrowseNextRequest implements IEncodeable, ServiceRequest
         $encoder->writeBoolean($this->releaseContinuationPoints);
 
         // Array of continuation points
-        $encoder->writeUInt32(count($this->continuationPoints));
+        $encoder->writeInt32(count($this->continuationPoints));
         foreach ($this->continuationPoints as $continuationPoint) {
             $encoder->writeByteString($continuationPoint);
         }
@@ -78,7 +78,7 @@ final readonly class BrowseNextRequest implements IEncodeable, ServiceRequest
         $requestHeader = RequestHeader::decode($decoder);
         $releaseContinuationPoints = $decoder->readBoolean();
 
-        $count = $decoder->readUInt32();
+        $count = $decoder->readArrayLength();
         $continuationPoints = [];
         for ($i = 0; $i < $count; $i++) {
             $cp = $decoder->readByteString();

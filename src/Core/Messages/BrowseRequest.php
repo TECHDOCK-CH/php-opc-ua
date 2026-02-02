@@ -60,7 +60,7 @@ final readonly class BrowseRequest implements IEncodeable, ServiceRequest
         $encoder->writeUInt32($this->requestedMaxReferencesPerNode);
 
         // Array of BrowseDescriptions
-        $encoder->writeUInt32(count($this->nodesToBrowse));
+        $encoder->writeInt32(count($this->nodesToBrowse));
         foreach ($this->nodesToBrowse as $browseDesc) {
             $browseDesc->encode($encoder);
         }
@@ -72,7 +72,7 @@ final readonly class BrowseRequest implements IEncodeable, ServiceRequest
         $view = ViewDescription::decode($decoder);
         $requestedMaxReferencesPerNode = $decoder->readUInt32();
 
-        $count = $decoder->readUInt32();
+        $count = $decoder->readArrayLength();
         $nodesToBrowse = [];
         for ($i = 0; $i < $count; $i++) {
             $nodesToBrowse[] = BrowseDescription::decode($decoder);

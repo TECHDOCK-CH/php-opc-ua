@@ -38,6 +38,19 @@ $client = ClientBuilder::create()
     ->build();
 ```
 
+### "Decode failed" or large response errors
+
+**Symptom**: Errors while decoding large reads/browse responses
+
+**Causes**:
+- Server returns chunked responses that exceed negotiated limits
+- Client request exceeds server's max message size or chunk count
+
+**Solutions**:
+1. Reduce read/browse batch size (fewer nodes per request)
+2. Increase server-side OPC UA limits (MaxMessageSize/MaxChunkCount)
+3. Check that client and server agree on endpoint security settings
+
 ### "Certificate validation failed"
 
 **Symptom**: SSL/TLS errors
