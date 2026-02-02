@@ -166,7 +166,7 @@ final class OpcUaPadding
         }
 
         // Determine if we need 1 or 2 bytes for padding size
-        // For keys > 2048 bits (256 bytes), we need 2 bytes for ExtraPaddingSize
+        // For keys > 2048 bits (block size > 256 bytes), we need 2 bytes for PaddingSize
         // The padding size byte(s) indicate the total padding bytes count
         $paddingSizeBytes = ($plaintextBlockSize > 256) ? 2 : 1;
 

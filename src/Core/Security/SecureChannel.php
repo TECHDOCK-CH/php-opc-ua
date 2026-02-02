@@ -529,12 +529,10 @@ final class SecureChannel
                 $messagePayload = $plaintextPayload;
             }
 
-            // Sign the entire message: SecurityHeader + EncryptedPayload (or PlainPayload for Sign mode)
-            // For SignAndEncrypt: sign over SecurityHeader + ciphertext
-            // For Sign: sign over SecurityHeader + plaintext
+            // Sign SecurityHeader + payload (ciphertext for SignAndEncrypt, plaintext for Sign mode)
             $dataToSign = $securityHeaderBytes . $messagePayload;
 
-            // These values are guaranteed to be non-null by the validation in open()
+            // Client private key is guaranteed non-null by the validation in open()
             assert($this->clientPrivateKeyPem !== null, 'Client private key must be set');
 
             $signatureBytes = $this->securityHandler->signAsymmetric(
