@@ -47,6 +47,16 @@ final class SecureChannel
     private int $lastReceivedSequenceNumber = 0;
     private bool $sequenceNumberRolledOver = false;
 
+    // Client credentials for asymmetric operations
+    private ?string $clientCertificateDer = null;
+    private ?string $clientCertificatePem = null;
+    private ?string $clientPrivateKeyPem = null;
+    private ?string $clientPrivateKeyPassword = null;
+
+    // Server certificate (from endpoint discovery)
+    private ?string $serverCertificateDer = null;
+    private ?string $serverCertificatePem = null;
+
     public function __construct(
         private readonly TcpConnectionInterface $connection,
         private readonly MessageSecurityMode $securityMode = MessageSecurityMode::None,
@@ -56,12 +66,76 @@ final class SecureChannel
     }
 
     /**
+     * Set client certificate and private key for asymmetric signing and encryption
+     *
+     * @param string $certificateDer DER-encoded X.509 certificate
+     * @param string $privateKeyPem PEM-encoded private key
+     * @param string|null $privateKeyPassword Password for encrypted private key
+     */
+    public function setClientCertificate(
+        string $certificateDer,
+        string $privateKeyPem,
+        ?string $privateKeyPassword = null
+    ): void {
+        $this->clientCertificateDer = $certificateDer;
+        $this->clientCertificatePem = $this->derToPem($certificateDer);
+        $this->clientPrivateKeyPem = $privateKeyPem;
+        $this->clientPrivateKeyPassword = $privateKeyPassword;
+    }
+
+    /**
+     * Set server certificate for asymmetric encryption (used when not discovered via GetEndpoints)
+     *
+     * @param string $certificateDer DER-encoded X.509 certificate
+     */
+    public function setServerCertificate(string $certificateDer): void
+    {
+        $this->serverCertificateDer = $certificateDer;
+        $this->serverCertificatePem = $this->derToPem($certificateDer);
+    }
+
+    /**
+     * Convert DER-encoded certificate to PEM format
+     */
+    private function derToPem(string $der): string
+    {
+        $pem = "-----BEGIN CERTIFICATE-----\n";
+        $pem .= chunk_split(base64_encode($der), 64, "\n");
+        $pem .= "-----END CERTIFICATE-----\n";
+        return $pem;
+    }
+
+    /**
+     * Calculate SHA-1 thumbprint of a DER-encoded certificate
+     *
+     * @param string $certificateDer DER-encoded certificate
+     * @return string Raw binary SHA-1 hash (20 bytes)
+     */
+    private function calculateCertificateThumbprint(string $certificateDer): string
+    {
+        return hash('sha1', $certificateDer, true);
+    }
+
+    /**
      * Open the secure channel (perform handshake)
      */
     public function open(): void
     {
         if ($this->isOpen) {
             throw new RuntimeException('Secure channel is already open');
+        }
+
+        // Validate that client certificate is provided when security is enabled
+        if ($this->securityMode !== MessageSecurityMode::None) {
+            if ($this->clientCertificateDer === null || $this->clientPrivateKeyPem === null) {
+                throw new RuntimeException(
+                    'Client certificate and private key are required for security mode ' .
+                    $this->securityMode->name
+                );
+            }
+
+            // Create security handler for this policy
+            $this->securityHandler = SecurityPolicyFactory::createHandler($this->securityPolicy);
         }
 
         // Step 1: Connect TCP
@@ -122,8 +196,10 @@ final class SecureChannel
             && $this->clientNonce !== null
             && $this->serverNonce !== null
         ) {
-            // Create security handler for this policy
-            $this->securityHandler = SecurityPolicyFactory::createHandler($this->securityPolicy);
+            // Security handler should already be created in the validation step
+            if ($this->securityHandler === null) {
+                $this->securityHandler = SecurityPolicyFactory::createHandler($this->securityPolicy);
+            }
 
             // Derive session keys from nonces
             $this->currentKeys = ChannelSecurityKeys::derive(
@@ -374,17 +450,6 @@ final class SecureChannel
         $request->encode($bodyEncoder);
         $messageBody = $bodyEncoder->getBytes();
 
-        // Build asymmetric security header
-        $securityHeader = new AsymmetricSecurityHeader(
-            secureChannelId: 0, // 0 for initial OpenSecureChannel request
-            securityPolicy: $this->selectedEndpoint->securityPolicy ?? $this->securityPolicy,
-            senderCertificate: null,
-            receiverCertificateThumbprint: null
-        );
-        $securityHeaderEncoder = new BinaryEncoder();
-        $securityHeader->encode($securityHeaderEncoder);
-        $securityHeaderBytes = $securityHeaderEncoder->getBytes();
-
         // Build sequence header
         $sequenceHeader = new SequenceHeader(
             sequenceNumber: $this->nextSequenceNumber(),
@@ -394,11 +459,100 @@ final class SecureChannel
         $sequenceHeader->encode($sequenceHeaderEncoder);
         $sequenceHeaderBytes = $sequenceHeaderEncoder->getBytes();
 
-        // Calculate total message size (Header 8 bytes + Security Header + Sequence Header + Body)
+        // Determine certificates for asymmetric security header
+        $senderCertificate = null;
+        $receiverCertificateThumbprint = null;
+
+        if ($this->securityMode !== MessageSecurityMode::None && $this->securityHandler !== null) {
+            // Include sender certificate (client cert) for all non-None security modes
+            $senderCertificate = $this->clientCertificateDer;
+
+            // Include receiver certificate thumbprint if we have server certificate
+            if ($this->serverCertificateDer !== null) {
+                $receiverCertificateThumbprint = $this->calculateCertificateThumbprint(
+                    $this->serverCertificateDer
+                );
+            }
+        }
+
+        // Build asymmetric security header
+        $securityHeader = new AsymmetricSecurityHeader(
+            secureChannelId: 0, // 0 for initial OpenSecureChannel request
+            securityPolicy: $this->selectedEndpoint->securityPolicy ?? $this->securityPolicy,
+            senderCertificate: $senderCertificate,
+            receiverCertificateThumbprint: $receiverCertificateThumbprint
+        );
+        $securityHeaderEncoder = new BinaryEncoder();
+        $securityHeader->encode($securityHeaderEncoder);
+        $securityHeaderBytes = $securityHeaderEncoder->getBytes();
+
+        // === ASYMMETRIC SIGNING AND ENCRYPTION ===
+        $messagePayload = '';
+        $signatureBytes = '';
+
+        if ($this->securityMode !== MessageSecurityMode::None && $this->securityHandler !== null) {
+            $plaintextPayload = $sequenceHeaderBytes . $messageBody;
+
+            if ($this->securityMode === MessageSecurityMode::SignAndEncrypt) {
+                // SignAndEncrypt mode: Encrypt then Sign
+                if ($this->serverCertificatePem === null) {
+                    throw new RuntimeException(
+                        'Server certificate is required for SignAndEncrypt mode'
+                    );
+                }
+
+                // Add OPC UA asymmetric padding before encryption
+                $plaintextBlockSize = $this->securityHandler->getAsymmetricPlaintextBlockSize(
+                    $this->serverCertificatePem
+                );
+                $paddedPlaintext = OpcUaPadding::addAsymmetric(
+                    $plaintextPayload,
+                    $plaintextBlockSize,
+                    $this->securityHandler->getAsymmetricSignatureLength($this->clientCertificatePem ?? '')
+                );
+
+                // Encrypt in blocks using server's public key
+                $ciphertextBlockSize = $this->securityHandler->getAsymmetricCiphertextBlockSize(
+                    $this->serverCertificatePem
+                );
+                $encryptedPayload = '';
+                for ($i = 0; $i < strlen($paddedPlaintext); $i += $plaintextBlockSize) {
+                    $block = substr($paddedPlaintext, $i, $plaintextBlockSize);
+                    $encryptedPayload .= $this->securityHandler->encryptAsymmetric(
+                        $block,
+                        $this->serverCertificatePem
+                    );
+                }
+
+                $messagePayload = $encryptedPayload;
+            } else {
+                // Sign-only mode: No encryption, but add padding for signature
+                $signatureLength = $this->securityHandler->getAsymmetricSignatureLength(
+                    $this->clientCertificatePem ?? ''
+                );
+                // No padding needed for sign-only mode per OPC UA spec
+                $messagePayload = $plaintextPayload;
+            }
+
+            // Sign the entire message: SecurityHeader + EncryptedPayload (or PlainPayload for Sign mode)
+            // For SignAndEncrypt: sign over SecurityHeader + ciphertext
+            // For Sign: sign over SecurityHeader + plaintext
+            $dataToSign = $securityHeaderBytes . $messagePayload;
+            $signatureBytes = $this->securityHandler->signAsymmetric(
+                $dataToSign,
+                $this->clientPrivateKeyPem ?? '',
+                $this->clientPrivateKeyPassword
+            );
+        } else {
+            // No security: plaintext message (SecurityMode::None)
+            $messagePayload = $sequenceHeaderBytes . $messageBody;
+        }
+
+        // Calculate total message size (Header 8 bytes + Security Header + Payload + Signature)
         $messageSize = MessageHeader::HEADER_SIZE
             + strlen($securityHeaderBytes)
-            + strlen($sequenceHeaderBytes)
-            + strlen($messageBody);
+            + strlen($messagePayload)
+            + strlen($signatureBytes);
 
         // Build message header
         $messageHeader = MessageHeader::final(MessageType::OpenSecureChannel, $messageSize);
@@ -407,7 +561,7 @@ final class SecureChannel
         $headerBytes = $headerEncoder->getBytes();
 
         // Send complete message
-        $completeMessage = $headerBytes . $securityHeaderBytes . $sequenceHeaderBytes . $messageBody;
+        $completeMessage = $headerBytes . $securityHeaderBytes . $messagePayload . $signatureBytes;
         $this->connection->send($completeMessage);
     }
 
@@ -440,6 +594,96 @@ final class SecureChannel
 
         // Decode asymmetric security header
         $securityHeader = AsymmetricSecurityHeader::decode($decoder);
+
+        // Extract server certificate from the security header (if present)
+        if ($securityHeader->senderCertificate !== null && $securityHeader->senderCertificate !== '') {
+            $this->serverCertificateDer = $securityHeader->senderCertificate;
+            $this->serverCertificatePem = $this->derToPem($securityHeader->senderCertificate);
+        }
+
+        // === ASYMMETRIC SIGNATURE VERIFICATION AND DECRYPTION ===
+        if ($this->securityMode !== MessageSecurityMode::None && $this->securityHandler !== null) {
+            // Get the server certificate for signature verification
+            if ($this->serverCertificatePem === null) {
+                throw new RuntimeException(
+                    'Server certificate is required for signature verification'
+                );
+            }
+
+            // Re-encode security header for signature verification
+            $securityHeaderEncoder = new BinaryEncoder();
+            $securityHeader->encode($securityHeaderEncoder);
+            $securityHeaderBytes = $securityHeaderEncoder->getBytes();
+
+            // Calculate signature length (signature is at the end)
+            $signatureLength = $this->securityHandler->getAsymmetricSignatureLength(
+                $this->serverCertificatePem
+            );
+
+            $remainingPayloadLength = strlen($payload) - $decoder->getPosition();
+            $payloadWithoutSignatureLength = $remainingPayloadLength - $signatureLength;
+
+            if ($payloadWithoutSignatureLength < 0) {
+                throw new RuntimeException(
+                    "Invalid message: payload too short for signature " .
+                    "(expected signature: {$signatureLength} bytes, remaining: {$remainingPayloadLength} bytes)"
+                );
+            }
+
+            // Extract encrypted/plain payload and signature
+            $encryptedOrPlainPayload = $decoder->readBytes($payloadWithoutSignatureLength);
+            $receivedSignature = $decoder->readBytes($signatureLength);
+
+            // Verify signature: SecurityHeader + EncryptedPayload (or PlainPayload for Sign mode)
+            $dataToVerify = $securityHeaderBytes . $encryptedOrPlainPayload;
+            $isValid = $this->securityHandler->verifyAsymmetric(
+                $dataToVerify,
+                $receivedSignature,
+                $this->serverCertificatePem
+            );
+
+            if (!$isValid) {
+                throw new RuntimeException(
+                    'Asymmetric signature verification failed - possible tampering or wrong certificate'
+                );
+            }
+
+            // Decrypt if SignAndEncrypt mode
+            if ($this->securityMode === MessageSecurityMode::SignAndEncrypt) {
+                if ($this->clientPrivateKeyPem === null) {
+                    throw new RuntimeException(
+                        'Client private key is required for decryption'
+                    );
+                }
+
+                // Decrypt in blocks using client's private key
+                $ciphertextBlockSize = $this->securityHandler->getAsymmetricCiphertextBlockSize(
+                    $this->clientCertificatePem ?? ''
+                );
+                $plaintextBlockSize = $this->securityHandler->getAsymmetricPlaintextBlockSize(
+                    $this->clientCertificatePem ?? ''
+                );
+
+                $paddedPlaintext = '';
+                for ($i = 0; $i < strlen($encryptedOrPlainPayload); $i += $ciphertextBlockSize) {
+                    $block = substr($encryptedOrPlainPayload, $i, $ciphertextBlockSize);
+                    $paddedPlaintext .= $this->securityHandler->decryptAsymmetric(
+                        $block,
+                        $this->clientPrivateKeyPem,
+                        $this->clientPrivateKeyPassword
+                    );
+                }
+
+                // Remove OPC UA asymmetric padding
+                $plaintext = OpcUaPadding::removeAsymmetric($paddedPlaintext);
+
+                // Create new decoder for decrypted data
+                $decoder = new BinaryDecoder($plaintext);
+            } else {
+                // Sign-only mode: payload is plaintext
+                $decoder = new BinaryDecoder($encryptedOrPlainPayload);
+            }
+        }
 
         // Decode sequence header
         $sequenceHeader = SequenceHeader::decode($decoder);

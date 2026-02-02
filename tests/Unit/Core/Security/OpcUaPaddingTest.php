@@ -201,4 +201,94 @@ final class OpcUaPaddingTest extends TestCase
             self::assertSame($data, $unpadded, "Roundtrip failed for block size: {$blockSize}");
         }
     }
+
+    // ============== Asymmetric Padding Tests ==============
+
+    public function testAsymmetricPaddingRoundtrip(): void
+    {
+        $data = 'Hello, OPC UA Asymmetric!';
+        $plaintextBlockSize = 214; // Typical for 2048-bit RSA with OAEP SHA-1
+
+        $padded = OpcUaPadding::addAsymmetric($data, $plaintextBlockSize, 256);
+        $unpadded = OpcUaPadding::removeAsymmetric($padded);
+
+        self::assertSame($data, $unpadded);
+    }
+
+    public function testAsymmetricPaddedDataIsMultipleOfBlockSize(): void
+    {
+        $data = 'Test asymmetric data';
+        $plaintextBlockSize = 214;
+
+        $padded = OpcUaPadding::addAsymmetric($data, $plaintextBlockSize, 256);
+
+        self::assertSame(0, strlen($padded) % $plaintextBlockSize);
+    }
+
+    public function testAsymmetricPaddingWithVariousDataLengths(): void
+    {
+        $plaintextBlockSize = 214;
+
+        // Test various data lengths
+        for ($length = 0; $length <= 500; $length += 50) {
+            $data = str_repeat('x', $length);
+
+            $padded = OpcUaPadding::addAsymmetric($data, $plaintextBlockSize, 256);
+            $unpadded = OpcUaPadding::removeAsymmetric($padded);
+
+            self::assertSame($data, $unpadded, "Failed for data length: {$length}");
+            self::assertSame(0, strlen($padded) % $plaintextBlockSize, "Padded data not aligned for length: {$length}");
+        }
+    }
+
+    public function testAsymmetricPaddingSmallBlockSize(): void
+    {
+        // For keys <= 2048 bits, use 1-byte padding size
+        $data = 'Small key test';
+        $plaintextBlockSize = 100; // Smaller block size (< 256)
+
+        $padded = OpcUaPadding::addAsymmetric($data, $plaintextBlockSize, 128);
+        $unpadded = OpcUaPadding::removeAsymmetric($padded);
+
+        self::assertSame($data, $unpadded);
+        self::assertSame(0, strlen($padded) % $plaintextBlockSize);
+    }
+
+    public function testAsymmetricPaddingEmptyData(): void
+    {
+        $data = '';
+        $plaintextBlockSize = 214;
+
+        $padded = OpcUaPadding::addAsymmetric($data, $plaintextBlockSize, 256);
+        $unpadded = OpcUaPadding::removeAsymmetric($padded);
+
+        self::assertSame('', $unpadded);
+        self::assertSame(0, strlen($padded) % $plaintextBlockSize);
+    }
+
+    public function testCalculateAsymmetricPaddingLength(): void
+    {
+        $plaintextBlockSize = 214;
+
+        // 10 bytes of data + 1 size byte = 11 bytes
+        // Need (214 - 11) = 203 padding bytes + 1 size byte = 204 total
+        self::assertSame(204, OpcUaPadding::calculateAsymmetricPaddingLength(10, $plaintextBlockSize));
+
+        // 213 bytes of data + 1 size byte = 214 bytes (aligned)
+        // Need 0 padding bytes + 1 size byte = 1 total
+        self::assertSame(1, OpcUaPadding::calculateAsymmetricPaddingLength(213, $plaintextBlockSize));
+    }
+
+    public function testAsymmetricPaddingWithLargeBlockSize(): void
+    {
+        // For keys > 2048 bits (block size > 256), use 2-byte padding size
+        $data = 'Large key test';
+        $plaintextBlockSize = 300; // Larger block size (> 256)
+
+        $padded = OpcUaPadding::addAsymmetric($data, $plaintextBlockSize, 384);
+        $unpadded = OpcUaPadding::removeAsymmetric($padded);
+
+        self::assertSame($data, $unpadded);
+        self::assertSame(0, strlen($padded) % $plaintextBlockSize);
+    }
 }
