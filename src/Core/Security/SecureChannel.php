@@ -507,8 +507,7 @@ final class SecureChannel
                 );
                 $paddedPlaintext = OpcUaPadding::addAsymmetric(
                     $plaintextPayload,
-                    $plaintextBlockSize,
-                    $this->securityHandler->getAsymmetricSignatureLength($this->clientCertificatePem ?? '')
+                    $plaintextBlockSize
                 );
 
                 // Encrypt in blocks using server's public key
@@ -526,11 +525,7 @@ final class SecureChannel
 
                 $messagePayload = $encryptedPayload;
             } else {
-                // Sign-only mode: No encryption, but add padding for signature
-                $signatureLength = $this->securityHandler->getAsymmetricSignatureLength(
-                    $this->clientCertificatePem ?? ''
-                );
-                // No padding needed for sign-only mode per OPC UA spec
+                // Sign-only mode: No encryption, no padding needed per OPC UA spec
                 $messagePayload = $plaintextPayload;
             }
 

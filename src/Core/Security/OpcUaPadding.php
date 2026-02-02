@@ -151,17 +151,15 @@ final class OpcUaPadding
      * Add OPC UA asymmetric padding to data
      *
      * For asymmetric encryption, the plaintext is padded to be a multiple of the
-     * plaintext block size. The padding accounts for the signature that will be
-     * appended after the encrypted data.
+     * plaintext block size.
      *
      * Structure: [Data][Padding Bytes][Padding Size (1 byte)][ExtraPaddingSize (0 or 1 byte)]
      *
      * @param string $data Data to pad
      * @param int $plaintextBlockSize Plaintext block size for RSA encryption
-     * @param int $signatureLength Length of the signature that will be appended
      * @return string Padded data
      */
-    public static function addAsymmetric(string $data, int $plaintextBlockSize, int $signatureLength): string
+    public static function addAsymmetric(string $data, int $plaintextBlockSize): string
     {
         if ($plaintextBlockSize < 1) {
             throw new InvalidArgumentException("Invalid plaintext block size: {$plaintextBlockSize}");
@@ -273,9 +271,13 @@ final class OpcUaPadding
     /**
      * Calculate asymmetric padding length
      *
+     * Calculates the total number of bytes that will be added by addAsymmetric().
+     * This includes both padding bytes AND the size byte(s) (1 byte for keys <= 2048 bits,
+     * 2 bytes for larger keys).
+     *
      * @param int $dataLength Current data length
      * @param int $plaintextBlockSize Plaintext block size for RSA encryption
-     * @return int Total padding bytes (padding + size byte(s))
+     * @return int Total padding bytes (padding bytes + size byte(s))
      */
     public static function calculateAsymmetricPaddingLength(int $dataLength, int $plaintextBlockSize): int
     {
