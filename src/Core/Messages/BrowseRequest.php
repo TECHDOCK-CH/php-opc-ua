@@ -90,4 +90,9 @@ final readonly class BrowseRequest implements IEncodeable, ServiceRequest
     {
         return NodeId::numeric(0, self::TYPE_ID);
     }
+
+    public function getRequestHeader(): RequestHeader
+    {
+        return $this->requestHeader;
+    }
 }

@@ -130,7 +130,7 @@ final class Session
         $this->serverNonce = $response->serverNonce;
         $this->revisedSessionTimeout = (int)$response->revisedSessionTimeout;
 
-        // Propagate auth token to SecureChannel for automatic injection (mirrors C# ClientBase)
+        // Propagate auth token to SecureChannel for automatic injection
         $this->secureChannel->setAuthenticationToken($this->authenticationToken);
     }
 
