@@ -82,11 +82,16 @@ final class UserNameIdentityToken implements IEncodeable
             return;
         }
 
-        // Combine password + serverNonce as per OPC UA spec
-        $dataToEncrypt = $this->decryptedPassword;
-        if ($serverNonce !== null && $serverNonce !== '') {
-            $dataToEncrypt .= $serverNonce;
-        }
+        // Create length-prefixed data structure per OPC UA Part 4 Section 7.36.2.2
+        // Legacy Encrypted Token Secret Format: [UInt32 length][password bytes][server nonce]
+        // where length = sizeof(password) + sizeof(nonce), excluding the 4-byte length field itself
+        $passwordBytes = $this->decryptedPassword;
+        $nonceBytes = $serverNonce ?? '';
+        $totalLength = strlen($passwordBytes) + strlen($nonceBytes);
+
+        $encoder = new BinaryEncoder();
+        $encoder->writeInt32($totalLength);  // 4-byte length prefix (little-endian)
+        $dataToEncrypt = $encoder->getBytes() . $passwordBytes . $nonceBytes;
 
         // Determine padding and encryption algorithm based on security policy
         [$padding, $algorithmUri] = $this->getEncryptionParameters($securityPolicy);
@@ -157,25 +162,44 @@ final class UserNameIdentityToken implements IEncodeable
             );
         }
 
+        // Parse length-prefixed format per OPC UA Part 4 Section 7.36.2.2
+        // Format: [UInt32 length][password bytes][server nonce]
+        if (strlen($decrypted) < 4) {
+            throw new RuntimeException('Decrypted data is too short to contain length prefix');
+        }
+
+        $decoder = new BinaryDecoder($decrypted);
+        $declaredLength = $decoder->readInt32();
+        $actualLength = strlen($decrypted) - 4; // Subtract length field itself
+
+        if ($declaredLength !== $actualLength) {
+            throw new RuntimeException(
+                "Password length mismatch: declared=$declaredLength, actual=$actualLength"
+            );
+        }
+
+        // Extract password and nonce from the remaining bytes
+        $dataBytes = $decoder->readBytes($declaredLength);
+
         // Remove server nonce from the end if present
         if ($serverNonce !== null && $serverNonce !== '') {
             $nonceLength = strlen($serverNonce);
-            $passwordLength = strlen($decrypted) - $nonceLength;
+            $passwordLength = strlen($dataBytes) - $nonceLength;
 
             if ($passwordLength < 0) {
                 throw new RuntimeException('Decrypted data is shorter than server nonce');
             }
 
             // Verify nonce matches
-            $extractedNonce = substr($decrypted, $passwordLength);
+            $extractedNonce = substr($dataBytes, $passwordLength);
             if (!hash_equals($serverNonce, $extractedNonce)) {
                 throw new RuntimeException('Server nonce verification failed');
             }
 
-            return substr($decrypted, 0, $passwordLength);
+            return substr($dataBytes, 0, $passwordLength);
         }
 
-        return $decrypted;
+        return $dataBytes;
     }
 
     /**

@@ -7,6 +7,7 @@ namespace TechDock\OpcUa\Client;
 use RuntimeException;
 use TechDock\OpcUa\Core\Types\AnonymousIdentityToken;
 use TechDock\OpcUa\Core\Types\UserNameIdentityToken;
+use TechDock\OpcUa\Core\Types\UserTokenPolicy;
 use TechDock\OpcUa\Core\Types\UserTokenType;
 use TechDock\OpcUa\Core\Types\X509IdentityToken;
 
@@ -70,6 +71,90 @@ final class UserIdentity
             ),
             type: UserIdentityType::UserName,
         );
+    }
+
+    /**
+     * Create a username/password identity with auto-detected policyId from session
+     *
+     * Automatically selects the first available UserName token policy,
+     * prioritizing stronger security policies (Basic256Sha256 > Basic256 > Basic128Rsa15)
+     *
+     * @param Session $session The session to detect the policy from
+     * @param string $userName Username
+     * @param string $password Password (will be encrypted)
+     * @return self
+     * @throws RuntimeException If no username policies are available
+     */
+    public static function userNameFromSession(
+        Session $session,
+        string $userName,
+        string $password
+    ): self {
+        $endpoint = $session->getSecureChannel()->getSelectedEndpoint();
+
+        if ($endpoint === null) {
+            throw new RuntimeException('No endpoint selected - cannot detect policy ID');
+        }
+
+        // Find all username policies and sort by security strength
+        $usernamePolicies = [];
+        foreach ($endpoint->userIdentityTokens as $tokenPolicy) {
+            if ($tokenPolicy->tokenType === UserTokenType::UserName) {
+                $usernamePolicies[] = $tokenPolicy;
+            }
+        }
+
+        if ($usernamePolicies === []) {
+            throw new RuntimeException(
+                'No username authentication policies available on this endpoint. ' .
+                'Available token types: ' .
+                implode(', ', array_map(
+                    fn($p) => $p->tokenType->name,
+                    $endpoint->userIdentityTokens
+                ))
+            );
+        }
+
+        // Prioritize stronger security policies
+        $selectedPolicy = self::selectStrongestPolicy($usernamePolicies);
+
+        return self::userName($userName, $password, $selectedPolicy->policyId);
+    }
+
+    /**
+     * Select the strongest security policy from available username policies
+     * Priority: Basic256Sha256 > Aes128Sha256RsaOaep > Aes256Sha256RsaPss > Basic256 > Basic128Rsa15
+     *
+     * @param UserTokenPolicy[] $policies
+     * @return UserTokenPolicy
+     */
+    private static function selectStrongestPolicy(array $policies): UserTokenPolicy
+    {
+        $priorityMap = [
+            'Basic256Sha256' => 100,
+            'Aes256Sha256RsaPss' => 90,
+            'Aes128Sha256RsaOaep' => 85,
+            'Basic256' => 50,
+            'Basic128Rsa15' => 30,
+        ];
+
+        usort($policies, function ($a, $b) use ($priorityMap) {
+            $scoreA = 0;
+            $scoreB = 0;
+
+            foreach ($priorityMap as $algorithm => $score) {
+                if (str_contains($a->securityPolicyUri ?? '', $algorithm)) {
+                    $scoreA = $score;
+                }
+                if (str_contains($b->securityPolicyUri ?? '', $algorithm)) {
+                    $scoreB = $score;
+                }
+            }
+
+            return $scoreB - $scoreA; // Descending order
+        });
+
+        return $policies[0];
     }
 
     /**

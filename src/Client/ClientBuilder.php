@@ -49,6 +49,8 @@ final class ClientBuilder
     private bool $autoDiscovery = false;
     private ?MessageSecurityMode $preferredSecurityMode = null;
     private ?SecurityPolicy $preferredSecurityPolicy = null;
+    private ?string $username = null;
+    private ?string $password = null;
 
     private function __construct()
     {
@@ -163,7 +165,9 @@ final class ClientBuilder
      */
     public function withUsernameAuth(string $username, string $password): self
     {
-        $this->userIdentity = UserIdentity::userName($username, $password);
+        $this->username = $username;
+        $this->password = $password;
+        // Don't create UserIdentity yet - wait until we have the session
         return $this;
     }
 
@@ -266,6 +270,15 @@ final class ClientBuilder
         // Ensure anonymous policyId matches the server's token policy.
         if ($this->userIdentity->isAnonymous()) {
             $this->userIdentity = UserIdentity::anonymousFromSession($session);
+        }
+
+        // Auto-select username policy from endpoint
+        if ($this->username !== null && $this->password !== null) {
+            $this->userIdentity = UserIdentity::userNameFromSession(
+                $session,
+                $this->username,
+                $this->password
+            );
         }
 
         $session->activate($this->userIdentity);
