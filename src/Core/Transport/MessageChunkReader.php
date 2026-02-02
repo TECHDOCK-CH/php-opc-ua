@@ -56,9 +56,6 @@ final class MessageChunkReader
                 );
             }
 
-            $payload = $this->connection->receive($header->getPayloadSize());
-            $chunks[] = new MessageChunk($header, $payload);
-
             $chunkCount++;
             $totalBytes += $header->messageSize;
 
@@ -73,6 +70,9 @@ final class MessageChunkReader
                     "Message exceeds max size ({$totalBytes} > {$this->maxMessageSize})"
                 );
             }
+
+            $payload = $this->connection->receive($header->getPayloadSize());
+            $chunks[] = new MessageChunk($header, $payload);
         } while (!$header->isFinal() && !$header->isAbort());
 
         return $chunks;
