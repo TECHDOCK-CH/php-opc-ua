@@ -270,12 +270,14 @@ final class OpcUaPaddingTest extends TestCase
     {
         $plaintextBlockSize = 214;
 
-        // 10 bytes of data + 1 size byte = 11 bytes
-        // Need (214 - 11) = 203 padding bytes + 1 size byte = 204 total
+        // 10 bytes data + 1 size byte = 11 bytes used
+        // Remaining space: 214 - 11 = 203 bytes for padding
+        // Total overhead: 203 padding bytes + 1 size byte = 204 bytes
         self::assertSame(204, OpcUaPadding::calculateAsymmetricPaddingLength(10, $plaintextBlockSize));
 
-        // 213 bytes of data + 1 size byte = 214 bytes (aligned)
-        // Need 0 padding bytes + 1 size byte = 1 total
+        // 213 bytes data + 1 size byte = 214 bytes (exactly one block)
+        // No additional padding bytes needed, just the size byte
+        // Total overhead: 0 padding bytes + 1 size byte = 1 byte
         self::assertSame(1, OpcUaPadding::calculateAsymmetricPaddingLength(213, $plaintextBlockSize));
     }
 

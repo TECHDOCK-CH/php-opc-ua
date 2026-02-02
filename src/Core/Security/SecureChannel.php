@@ -533,9 +533,13 @@ final class SecureChannel
             // For SignAndEncrypt: sign over SecurityHeader + ciphertext
             // For Sign: sign over SecurityHeader + plaintext
             $dataToSign = $securityHeaderBytes . $messagePayload;
+
+            // These values are guaranteed to be non-null by the validation in open()
+            assert($this->clientPrivateKeyPem !== null, 'Client private key must be set');
+
             $signatureBytes = $this->securityHandler->signAsymmetric(
                 $dataToSign,
-                $this->clientPrivateKeyPem ?? '',
+                $this->clientPrivateKeyPem,
                 $this->clientPrivateKeyPassword
             );
         } else {
@@ -651,12 +655,15 @@ final class SecureChannel
                     );
                 }
 
+                // Client certificate is guaranteed non-null by validation in open()
+                assert($this->clientCertificatePem !== null, 'Client certificate must be set');
+
                 // Decrypt in blocks using client's private key
                 $ciphertextBlockSize = $this->securityHandler->getAsymmetricCiphertextBlockSize(
-                    $this->clientCertificatePem ?? ''
+                    $this->clientCertificatePem
                 );
                 $plaintextBlockSize = $this->securityHandler->getAsymmetricPlaintextBlockSize(
-                    $this->clientCertificatePem ?? ''
+                    $this->clientCertificatePem
                 );
 
                 $paddedPlaintext = '';
