@@ -15,6 +15,7 @@ use TechDock\OpcUa\Core\Messages\OpenSecureChannelRequest;
 use TechDock\OpcUa\Core\Messages\OpenSecureChannelResponse;
 use TechDock\OpcUa\Core\Messages\RequestHeader;
 use TechDock\OpcUa\Core\Messages\ServiceFault;
+use TechDock\OpcUa\Core\Messages\ServiceRequest;
 use TechDock\OpcUa\Core\Transport\AcknowledgeMessage;
 use TechDock\OpcUa\Core\Transport\ErrorMessage;
 use TechDock\OpcUa\Core\Transport\HelloMessage;
@@ -43,6 +44,9 @@ final class SecureChannel
     private ?string $serverNonce = null;
     private ?ChannelSecurityKeys $currentKeys = null;
     private ?SecurityPolicyHandlerInterface $securityHandler = null;
+
+    // Authentication token (mirrors C# ClientBase.AuthenticationToken)
+    private ?NodeId $authenticationToken = null;
 
     // Sequence number validation
     private int $lastReceivedSequenceNumber = 0;
@@ -230,6 +234,62 @@ final class SecureChannel
     public function getSelectedEndpoint(): ?EndpointDescription
     {
         return $this->selectedEndpoint;
+    }
+
+    /**
+     * Set the session's AuthenticationToken for automatic injection into service requests.
+     *
+     * Mirrors C# ClientBase.AuthenticationToken — every service request sent through
+     * this channel will automatically have the token injected if the request's
+     * RequestHeader contains a null AuthenticationToken.
+     */
+    public function setAuthenticationToken(?NodeId $authenticationToken): void
+    {
+        $this->authenticationToken = $authenticationToken;
+    }
+
+    /**
+     * Inject the stored AuthenticationToken into the encoded message body.
+     *
+     * Replaces the null-token RequestHeader bytes with a new RequestHeader
+     * containing the session's AuthenticationToken. Uses deterministic offset
+     * calculation based on TypeId length to avoid binary pattern matching.
+     *
+     * @return string The modified message body with auth token injected
+     */
+    private function injectAuthenticationToken(
+        string $messageBody,
+        ServiceRequest $request,
+        RequestHeader $originalHeader,
+    ): string {
+        // TypeId byte length (known position)
+        $typeIdEncoder = new BinaryEncoder();
+        $request->getTypeId()->encode($typeIdEncoder);
+        $typeIdLength = strlen($typeIdEncoder->getBytes());
+
+        // Original header byte length
+        $originalEncoder = new BinaryEncoder();
+        $originalHeader->encode($originalEncoder);
+        $originalHeaderLength = strlen($originalEncoder->getBytes());
+
+        // New header with auth token
+        $newHeader = new RequestHeader(
+            authenticationToken: $this->authenticationToken ?? NodeId::numeric(0, 0),
+            timestamp: $originalHeader->timestamp,
+            requestHandle: $originalHeader->requestHandle,
+            returnDiagnostics: $originalHeader->returnDiagnostics,
+            auditEntryId: $originalHeader->auditEntryId,
+            timeoutHint: $originalHeader->timeoutHint,
+            additionalHeader: $originalHeader->additionalHeader,
+        );
+        $newEncoder = new BinaryEncoder();
+        $newHeader->encode($newEncoder);
+        $newHeaderBytes = $newEncoder->getBytes();
+
+        // Deterministic splice: TypeId bytes + new header + rest of body
+        return substr($messageBody, 0, $typeIdLength)
+            . $newHeaderBytes
+            . substr($messageBody, $typeIdLength + $originalHeaderLength);
     }
 
     /**
@@ -499,24 +559,23 @@ final class SecureChannel
      * Send a service request and receive response (MSG message type)
      *
      * @template T of object
-     * @param object $request The request message
+     * @param ServiceRequest $request The request message
      * @param class-string<T> $responseClass The expected response class
      * @return T The decoded response
      */
-    public function sendServiceRequest(object $request, string $responseClass): object
+    public function sendServiceRequest(ServiceRequest $request, string $responseClass): object
     {
         // Encode request body with TypeId
         $bodyEncoder = new BinaryEncoder();
-
-        // Prepend TypeId if the request has getTypeId() method
-        if (method_exists($request, 'getTypeId')) {
-            $request->getTypeId()->encode($bodyEncoder);
-        }
-
-        if (method_exists($request, 'encode')) {
-            $request->encode($bodyEncoder);
-        }
+        $request->getTypeId()->encode($bodyEncoder);
+        $request->encode($bodyEncoder);
         $messageBody = $bodyEncoder->getBytes();
+
+        // Auto-inject AuthenticationToken (mirrors C# ClientBase.UpdateRequestHeader)
+        $header = $request->getRequestHeader();
+        if ($this->authenticationToken !== null && $header->authenticationToken->isNull()) {
+            $messageBody = $this->injectAuthenticationToken($messageBody, $request, $header);
+        }
 
         // Build symmetric security header
         $securityHeader = new SymmetricSecurityHeader(

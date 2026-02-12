@@ -100,6 +100,11 @@ final readonly class FindServersRequest implements IEncodeable, ServiceRequest
         return NodeId::numeric(0, self::TYPE_ID);
     }
 
+    public function getRequestHeader(): RequestHeader
+    {
+        return $this->requestHeader;
+    }
+
     /**
      * Create request for finding servers
      *
