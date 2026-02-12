@@ -48,7 +48,7 @@ Subscriptions are far more efficient than polling:
 ```php
 // ❌ Polling: Wastes bandwidth
 while (true) {
-    $value = $client->session->read($nodeId);
+    $value = $client->session->read([$nodeId])[0];
     checkChange($value);
     usleep(100000);
 }

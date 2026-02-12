@@ -69,8 +69,15 @@ $client = ClientBuilder::create()
 echo "Connected: " . ($client->isConnected() ? 'YES' : 'NO') . "\n";
 
 // Read server's current time (standard node)
-$serverTime = $client->session->read(NodeId::numeric(0, 2258));
-echo "Server time: {$serverTime->value}\n";
+$results = $client->session->read([NodeId::numeric(0, 2258)]);
+$serverTime = $results[0] ?? null;
+
+if ($serverTime !== null && $serverTime->isGood() && $serverTime->value !== null) {
+    echo "Server time: {$serverTime->value}\n";
+} else {
+    $status = $serverTime?->statusCode?->toString() ?? 'Unknown';
+    echo "Failed to read server time (status: {$status})\n";
+}
 
 // Clean up
 $client->disconnect();
@@ -86,7 +93,7 @@ php test-connection.php
 Expected output:
 ```
 Connected: YES
-Server time: 2024-11-08T20:30:45.123Z
+Server time: DateTime: 2024-11-08T20:30:45.123Z
 Disconnected
 ```
 
@@ -177,12 +184,14 @@ use TechDock\OpcUa\Core\Types\NodeId;
 
 // Read single value
 $nodeId = NodeId::numeric(2, 1001);  // namespace 2, identifier 1001
-$value = $client->session->read($nodeId);
+$value = $client->session->read([$nodeId])[0];
 
 echo "Value: {$value->value}\n";
 echo "Timestamp: {$value->serverTimestamp}\n";
 echo "Status: {$value->statusCode}\n";
 ```
+
+`Session::read()` accepts an array of nodes and returns an array of `DataValue` results in the same order.
 
 ### Writing Values
 

@@ -255,7 +255,7 @@ Builds and connects the client, creates a session, and returns a `ConnectedClien
 $client = $builder->build();
 
 // Use the client
-$client->session->read($nodeId);
+$client->session->read([$nodeId])[0];
 $client->browser->browse($folderId);
 
 // Check status

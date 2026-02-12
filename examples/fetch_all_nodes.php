@@ -157,7 +157,7 @@ try {
     echo "✓ Session activated successfully\n";
     echo "\nBrowsing and fetching values...\n";
 
-    $rootNodeId = NodeId::numeric(0, 54416); // Objects folder
+    $rootNodeId = NodeId::numeric(0, 84); // Root folder
     $visited = [];
     $visited[$rootNodeId->toString()] = true;
 

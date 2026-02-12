@@ -58,7 +58,7 @@ $client = ClientBuilder::create()
     ->build();
 
 // Read a value
-$serverTime = $client->session->read(NodeId::numeric(0, 2258));
+$serverTime = $client->session->read([NodeId::numeric(0, 2258)])[0];
 echo "Server time: {$serverTime->value}\n";
 
 // Browse nodes

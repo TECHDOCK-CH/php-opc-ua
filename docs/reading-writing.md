@@ -9,7 +9,7 @@ use TechDock\OpcUa\Core\Types\{NodeId, Variant, VariantType};
 
 // Read a value
 $nodeId = NodeId::numeric(2, 1001);
-$dataValue = $client->session->read($nodeId);
+$dataValue = $client->session->read([$nodeId])[0];
 echo "Value: {$dataValue->value}\n";
 
 // Write a value
@@ -27,12 +27,12 @@ use TechDock\OpcUa\Core\Types\{NodeId, TimestampsToReturn};
 $nodeId = NodeId::numeric(2, 1001);
 
 // Read with both timestamps (default)
-$dataValue = $client->session->read($nodeId);
+$dataValue = $client->session->read([$nodeId])[0];
 
 // Read with specific timestamp preference
-$dataValue = $client->session->read($nodeId, TimestampsToReturn::Server);
-$dataValue = $client->session->read($nodeId, TimestampsToReturn::Source);
-$dataValue = $client->session->read($nodeId, TimestampsToReturn::Neither);
+$dataValue = $client->session->read([$nodeId], 0.0, TimestampsToReturn::Server)[0];
+$dataValue = $client->session->read([$nodeId], 0.0, TimestampsToReturn::Source)[0];
+$dataValue = $client->session->read([$nodeId], 0.0, TimestampsToReturn::Neither)[0];
 
 // Access the result
 echo "Value: {$dataValue->value}\n";
@@ -290,7 +290,7 @@ $allResults = readInBatches($client->session, $nodeIds, 100);
 use TechDock\OpcUa\Exceptions\StatusCodeException;
 
 try {
-    $value = $client->session->read($nodeId);
+    $value = $client->session->read([$nodeId])[0];
 
     if (!$value->statusCode->isGood()) {
         // Check specific status codes
@@ -341,7 +341,7 @@ if (canWrite($client->session, $nodeId)) {
 ```php
 // ❌ Slow: Individual calls
 foreach ($nodeIds as $nodeId) {
-    $value = $client->session->read($nodeId);
+    $value = $client->session->read([$nodeId])[0];
     process($value);
 }
 
@@ -356,10 +356,10 @@ foreach ($values as $value) {
 
 ```php
 // ❌ Slower: Request all timestamps
-$value = $client->session->read($nodeId, TimestampsToReturn::Both);
+$value = $client->session->read([$nodeId], 0.0, TimestampsToReturn::Both)[0];
 
 // ✅ Faster: Request only what you need
-$value = $client->session->read($nodeId, TimestampsToReturn::Neither);
+$value = $client->session->read([$nodeId], 0.0, TimestampsToReturn::Neither)[0];
 ```
 
 ### 3. Check Status Before Processing
@@ -383,7 +383,7 @@ foreach ($values as $i => $value) {
 
 ```php
 // Read current value
-$current = $client->session->read($nodeId);
+$current = $client->session->read([$nodeId])[0];
 
 // Modify
 $newValue = $current->value * 1.1;  // Increase by 10%
@@ -424,7 +424,7 @@ if (!$allGood) {
 $lastValue = null;
 
 while (true) {
-    $current = $client->session->read($nodeId);
+    $current = $client->session->read([$nodeId])[0];
 
     if ($current->value !== $lastValue) {
         echo "Value changed: {$current->value}\n";

@@ -164,7 +164,7 @@ try {
     echo "Connected\n";
 
     // 2. Your code here
-    $value = $client->session->read(NodeId::numeric(0, 2258));
+    $value = $client->session->read([NodeId::numeric(0, 2258)])[0];
     echo "Server time: {$value->value}\n";
 
     // 3. Clean up

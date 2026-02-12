@@ -139,7 +139,7 @@ $logger->pushHandler(new RotatingFileHandler(
 function healthCheck(ConnectedClient $client): bool {
     try {
         // Read a standard node
-        $value = $client->session->read(NodeId::numeric(0, 2258));
+        $value = $client->session->read([NodeId::numeric(0, 2258)])[0];
         return $value->statusCode->isGood();
     } catch (Throwable) {
         return false;
@@ -185,7 +185,7 @@ function withRetry(callable $operation, int $maxAttempts = 3): mixed {
 }
 
 // Usage
-$value = withRetry(fn() => $client->session->read($nodeId));
+$value = withRetry(fn() => $client->session->read([$nodeId])[0]);
 ```
 
 ### Connection Recovery

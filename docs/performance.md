@@ -89,7 +89,7 @@ $client = ClientBuilder::create()
 // ❌ Bad: Create new client for each operation
 function readValue($nodeId) {
     $client = ClientBuilder::create()->endpoint($url)->build();
-    $value = $client->session->read($nodeId);
+    $value = $client->session->read([$nodeId])[0];
     $client->disconnect();
     return $value;
 }
@@ -98,7 +98,7 @@ function readValue($nodeId) {
 $client = ClientBuilder::create()->endpoint($url)->build();
 
 function readValue($client, $nodeId) {
-    return $client->session->read($nodeId);
+    return $client->session->read([$nodeId])[0];
 }
 ```
 
@@ -109,7 +109,7 @@ function readValue($client, $nodeId) {
 ```php
 // ❌ Slow: Individual reads
 foreach ($nodeIds as $nodeId) {
-    $values[] = $client->session->read($nodeId);
+    $values[] = $client->session->read([$nodeId])[0];
 }
 
 // ✅ Fast: Single batch read

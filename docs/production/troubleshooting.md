@@ -142,7 +142,7 @@ foreach (array_chunk($nodeIds, 100) as $batch) {
 
 **Check specific codes**:
 ```php
-$value = $client->session->read($nodeId);
+$value = $client->session->read([$nodeId])[0];
 
 if ($value->statusCode->value === 0x80340000) {
     echo "Node does not exist\n";
