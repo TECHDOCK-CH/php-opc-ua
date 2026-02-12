@@ -14,4 +14,6 @@ use TechDock\OpcUa\Core\Types\NodeId;
 interface ServiceRequest extends IEncodeable
 {
     public function getTypeId(): NodeId;
+
+    public function getRequestHeader(): RequestHeader;
 }

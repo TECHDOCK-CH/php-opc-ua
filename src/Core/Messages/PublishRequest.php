@@ -79,4 +79,9 @@ final readonly class PublishRequest implements ServiceRequest
     {
         return NodeId::numeric(0, self::TYPE_ID);
     }
+
+    public function getRequestHeader(): RequestHeader
+    {
+        return $this->requestHeader;
+    }
 }
