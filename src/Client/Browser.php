@@ -156,12 +156,9 @@ final class Browser
                         if (!isset($allReferences[$refIdStr])) {
                             $allReferences[$refIdStr] = $reference;
 
-                            // Add to next level if not a leaf node type
+                            // Add to next level for recursive browsing
                             if ($reference->nodeClass !== null) {
-                                // Don't browse Variable nodes (typically leaf nodes)
-                                if ($reference->nodeClass !== 2) { // 2 = Variable
-                                    $nextLevelNodes[] = $reference->nodeId->nodeId;
-                                }
+                                $nextLevelNodes[] = $reference->nodeId->nodeId;
                             }
                         }
                     }
