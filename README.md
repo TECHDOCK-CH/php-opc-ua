@@ -128,6 +128,7 @@ while (true) {
 - PHP 8.4 or higher
 - ext-sockets - Socket communication
 - OpenSSL support - For secure connections
+- phpseclib 4 (`phpseclib/phpseclib` ^4.0, installed by Composer)
 
 ## Supported Features
 
