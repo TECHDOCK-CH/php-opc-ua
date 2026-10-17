@@ -189,7 +189,7 @@ final class Session
             $serverCertificatePem = $this->derToPem($serverCertificate);
 
             // Determine security policy to use for password encryption.
-            $securityPolicy = $endpoint->securityPolicy ?? SecurityPolicy::None;
+            $securityPolicy = $endpoint->securityPolicy;
             if ($endpoint !== null) {
                 foreach ($endpoint->userIdentityTokens as $tokenPolicy) {
                     if (
