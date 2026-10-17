@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace TechDock\OpcUa\Core\Security;
 
-use phpseclib3\Crypt\AES;
+use phpseclib4\Crypt\AES;
 use RuntimeException;
 
 /**

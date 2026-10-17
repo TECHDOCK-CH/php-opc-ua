@@ -4,7 +4,8 @@ declare(strict_types=1);
 
 namespace TechDock\OpcUa\Core\Security;
 
-use phpseclib3\File\X509;
+use Exception;
+use phpseclib4\File\X509;
 use RuntimeException;
 
 /**
@@ -21,14 +22,11 @@ final class TrustStore
     /** @var array<string, string> Map of DN hash => DER certificate (for lookups) */
     private array $subjectIndex = [];
 
-    private readonly X509 $x509;
     private bool $autoAccept = false;
 
     public function __construct(
         private readonly ?string $persistPath = null,
     ) {
-        $this->x509 = new X509();
-
         // Load certificates from disk if path provided
         if ($this->persistPath !== null && is_dir($this->persistPath)) {
             $this->loadFromDisk();
@@ -132,12 +130,18 @@ final class TrustStore
     /**
      * Find certificate by subject DN
      *
-     * @param array<string, string> $subject Subject DN components
+     * @param array<int|string, mixed> $subject Subject DN, as returned by X509::getSubjectDN(X509::DN_ARRAY)
+     *                                         or as a simple ['CN' => 'name', 'O' => 'org'] map
      * @return string|null DER certificate or null if not found
      */
     public function findBySubject(array $subject): ?string
     {
-        $subjectHash = $this->hashDN($subject);
+        try {
+            $subjectHash = $this->hashDN(DistinguishedName::normalize($subject));
+        } catch (Exception) {
+            return null;
+        }
+
         return $this->subjectIndex[$subjectHash] ?? null;
     }
 
@@ -191,36 +195,55 @@ final class TrustStore
      */
     private function getSubjectHash(string $certificateDer): string
     {
-        $cert = $this->x509->loadX509($certificateDer);
-
-        if ($cert === false) {
-            throw new RuntimeException('Failed to parse certificate');
+        try {
+            $subject = X509::load($certificateDer)->getSubjectDN(X509::DN_ARRAY);
+        } catch (Exception $e) {
+            throw new RuntimeException('Failed to parse certificate: ' . $e->getMessage(), 0, $e);
         }
 
-        $subject = $cert['tbsCertificate']['subject'];
+        if (!is_array($subject)) {
+            throw new RuntimeException('Failed to read certificate subject');
+        }
+
         return $this->hashDN($subject);
     }
 
     /**
      * Hash a DN for indexing
      *
-     * @param array<int|string, mixed> $dn Distinguished Name array
+     * Uses DistinguishedName::canonical() (UTF-8, trimmed, lowercased values), so equal
+     * names in different ASN.1 string types match.
+     *
+     * @param array<int|string, mixed> $dn DN in X509::DN_ARRAY format
      */
     private function hashDN(array $dn): string
     {
-        // Normalize DN and hash it
-        $parts = [];
+        return hash('sha256', DistinguishedName::canonical($dn));
+    }
 
-        foreach ($dn as $rdn) {
-            foreach ($rdn as $attr) {
-                $type = $attr['type'] ?? '';
-                $value = $attr['value'] ?? '';
-                $parts[] = strtoupper($type) . '=' . trim($value);
+    /**
+     * Split PEM/DER input into DER-encoded certificates
+     *
+     * @return list<string>
+     */
+    private static function extractCertificates(string $data): array
+    {
+        if (preg_match_all('/-----BEGIN CERTIFICATE-----.+?-----END CERTIFICATE-----/s', $data, $matches) > 0) {
+            $blocks = $matches[0];
+        } else {
+            $blocks = [$data];
+        }
+
+        $certificates = [];
+        foreach ($blocks as $block) {
+            try {
+                $certificates[] = X509::load($block)->toString(['binary' => true]);
+            } catch (Exception) {
+                // skip unparseable entries
             }
         }
 
-        sort($parts);
-        return hash('sha256', implode(',', $parts));
+        return $certificates;
     }
 
     /**
@@ -275,20 +298,9 @@ final class TrustStore
             throw new RuntimeException("Failed to read PEM file: $pemPath");
         }
 
-        // Parse PEM and extract all certificates
-        $x509 = new X509();
-        $certs = $x509->loadX509($pemData);
-
-        // Handle single cert vs cert chain
-        if (!is_array($certs) || !isset($certs[0])) {
-            $certs = [$certs];
-        }
-
-        foreach ($certs as $cert) {
-            if (is_array($cert)) {
-                $der = $x509->saveX509($cert);
-                $trustStore->addTrustedCertificate($der, persist: false);
-            }
+        // Parse PEM and extract all certificates (single cert or chain)
+        foreach (self::extractCertificates($pemData) as $der) {
+            $trustStore->addTrustedCertificate($der, persist: false);
         }
 
         return $trustStore;
@@ -304,7 +316,6 @@ final class TrustStore
         }
 
         $trustStore = new self();
-        $x509 = new X509();
 
         // Load .pem files
         $pemFiles = glob($dirPath . '/*.pem');
@@ -312,9 +323,7 @@ final class TrustStore
             foreach ($pemFiles as $file) {
                 $pemData = file_get_contents($file);
                 if ($pemData !== false) {
-                    $cert = $x509->loadX509($pemData);
-                    if (is_array($cert)) {
-                        $der = $x509->saveX509($cert);
+                    foreach (self::extractCertificates($pemData) as $der) {
                         $trustStore->addTrustedCertificate($der, persist: false);
                     }
                 }
@@ -338,9 +347,7 @@ final class TrustStore
             foreach ($crtFiles as $file) {
                 $data = file_get_contents($file);
                 if ($data !== false) {
-                    $cert = $x509->loadX509($data);
-                    if (is_array($cert)) {
-                        $der = $x509->saveX509($cert);
+                    foreach (self::extractCertificates($data) as $der) {
                         $trustStore->addTrustedCertificate($der, persist: false);
                     }
                 }

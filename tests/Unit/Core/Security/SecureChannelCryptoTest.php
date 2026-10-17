@@ -14,8 +14,8 @@ use TechDock\OpcUa\Core\Security\SecureChannelCrypto;
 use TechDock\OpcUa\Core\Security\SecurityPolicy;
 use TechDock\OpcUa\Core\Security\SecurityPolicyFactory;
 use TechDock\OpcUa\Core\Security\SequenceHeader;
-use phpseclib3\Crypt\RSA;
-use phpseclib3\File\X509;
+use phpseclib4\Crypt\RSA;
+use phpseclib4\File\X509;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 
@@ -26,37 +26,20 @@ final class SecureChannelCryptoTest extends TestCase
 
     private static function generateCertificate(): array
     {
-        $privateKey = RSA::createKey(2048);
-        $publicKey = $privateKey->getPublicKey();
+        $privateKey = RSA::createKey(2048)
+            ->withPadding(RSA::SIGNATURE_PKCS1)
+            ->withHash('sha256');
 
-        $subject = new X509();
-        $subject->setDN(['cn' => 'PHP OPC UA Test']);
-        $subject->setPublicKey($publicKey);
-        $subject->setStartDate('-1 day');
-        $subject->setEndDate('+1 year');
-        $subject->setSerialNumber(random_bytes(16));
+        $certificate = new X509($privateKey->getPublicKey());
+        $certificate->setSubjectDN(['id-at-commonName' => 'PHP OPC UA Test']);
+        $certificate->setIssuerDN($certificate->getSubjectDN(X509::DN_ARRAY));
+        $certificate->setStartDate('-1 day');
+        $certificate->setEndDate('+1 year');
+        $certificate->setSerialNumber(random_bytes(16));
 
-        $issuer = new X509();
-        $issuer->setPrivateKey($privateKey);
-        $issuer->setDN(['cn' => 'PHP OPC UA Test']);
-
-        $certificate = $issuer->sign($issuer, $subject);
-        $certificatePem = $issuer->saveX509($certificate);
-        $certificateDer = base64_decode(
-            preg_replace(
-                '/\s+/',
-                '',
-                str_replace([
-                    '-----BEGIN CERTIFICATE-----',
-                    '-----END CERTIFICATE-----',
-                ], '', $certificatePem)
-            ),
-            true
-        );
-
-        if ($certificateDer === false) {
-            throw new RuntimeException('Failed to convert certificate to DER.');
-        }
+        $privateKey->sign($certificate);
+        $certificatePem = $certificate->toString();
+        $certificateDer = $certificate->toString(['binary' => true]);
 
         return [
             'privateKeyPem' => $privateKey->toString('PKCS1'),

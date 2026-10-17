@@ -20,12 +20,12 @@
     "require": {
         "php": "^8.4",
         "ext-sockets": "*",
-        "phpseclib/phpseclib": "^3.0",
+        "phpseclib/phpseclib": "^4.0",
         "psr/log": "^3.0",
         "psr/simple-cache": "^3.0",
         "wapmorgan/binary-stream": "^0.4",
-        "symfony/cache": "^7.0",
-        "brick/date-time": "^0.7",
+        "symfony/cache": "^7.0 || ^8.0",
+        "brick/date-time": "^0.7 || ^0.10",
         "monolog/monolog": "^3.0"
     },
     "require-dev": {

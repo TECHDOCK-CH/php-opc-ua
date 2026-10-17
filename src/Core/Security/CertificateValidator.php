@@ -4,7 +4,14 @@ declare(strict_types=1);
 
 namespace TechDock\OpcUa\Core\Security;
 
-use phpseclib3\File\X509;
+use ArrayAccess;
+use DateTimeInterface;
+use Exception;
+use phpseclib4\Crypt\RSA;
+use phpseclib4\File\ASN1;
+use phpseclib4\File\ASN1\Maps\HashAlgorithm;
+use phpseclib4\File\ASN1\Maps\RSASSA_PSS_params;
+use phpseclib4\File\X509;
 
 /**
  * Certificate Validator
@@ -17,14 +24,17 @@ use phpseclib3\File\X509;
  */
 final class CertificateValidator
 {
-    private readonly X509 $x509;
+    /** Upper bound for issuer lookups, protects against issuer cycles in the trust store */
+    private const MAX_CHAIN_DEPTH = 10;
+
+    /** Hash algorithms accepted in certificate signatures */
+    private const SIGNATURE_HASHES = ['sha1', 'sha224', 'sha256', 'sha384', 'sha512'];
 
     public function __construct(
         private readonly TrustStore $trustStore,
         private readonly bool $checkExpiration = true,
         private readonly bool $checkChain = true,
     ) {
-        $this->x509 = new X509();
     }
 
     /**
@@ -35,12 +45,7 @@ final class CertificateValidator
      */
     public function validate(string $certificateDer): void
     {
-        // Load certificate
-        $cert = $this->x509->loadX509($certificateDer);
-
-        if ($cert === false) {
-            throw new CertificateValidationException('Failed to parse certificate');
-        }
+        $cert = self::loadCertificate($certificateDer);
 
         // Check expiration
         if ($this->checkExpiration) {
@@ -52,23 +57,47 @@ final class CertificateValidator
 
         // Check chain (if enabled and issuer is not self)
         if ($this->checkChain && !$this->isSelfSigned($cert)) {
-            $this->validateChain($cert);
+            $this->validateChain($cert, 0);
         }
+    }
+
+    /**
+     * Load and decode a certificate (DER or PEM)
+     *
+     * phpseclib 4 decodes lazily, so the fields used by this class are touched here
+     * to surface parse errors as CertificateValidationException.
+     *
+     * @throws CertificateValidationException
+     */
+    private static function loadCertificate(string $certificate, string $error = 'Failed to parse certificate'): X509
+    {
+        try {
+            $cert = X509::load($certificate);
+            $cert->getSubjectDN(X509::DN_ARRAY);
+            $cert->getIssuerDN(X509::DN_ARRAY);
+            $hasValidity = isset($cert['tbsCertificate']['validity']['notBefore'], $cert['tbsCertificate']['validity']['notAfter']);
+        } catch (Exception $e) {
+            throw new CertificateValidationException($error . ': ' . $e->getMessage(), 0, $e);
+        }
+
+        if (!$hasValidity) {
+            throw new CertificateValidationException($error . ': missing validity');
+        }
+
+        return $cert;
     }
 
     /**
      * Validate certificate is not expired
      *
-     * @param array<string, mixed> $cert
      * @throws CertificateValidationException
      */
-    private function validateExpiration(array $cert): void
+    private function validateExpiration(X509 $cert): void
     {
         $now = time();
 
         // Check notBefore
-        $notBefore = $cert['tbsCertificate']['validity']['notBefore'];
-        $notBeforeTime = $this->parseTime($notBefore);
+        $notBeforeTime = $this->parseTime($cert['tbsCertificate']['validity']['notBefore']);
 
         if ($now < $notBeforeTime) {
             throw new CertificateValidationException(
@@ -77,8 +106,7 @@ final class CertificateValidator
         }
 
         // Check notAfter
-        $notAfter = $cert['tbsCertificate']['validity']['notAfter'];
-        $notAfterTime = $this->parseTime($notAfter);
+        $notAfterTime = $this->parseTime($cert['tbsCertificate']['validity']['notAfter']);
 
         if ($now > $notAfterTime) {
             throw new CertificateValidationException(
@@ -104,117 +132,169 @@ final class CertificateValidator
     /**
      * Validate certificate chain
      *
-     * @param array<string, mixed> $cert
+     * Looks up the issuer by subject DN in the trust store, verifies the certificate
+     * signature with the issuer's public key and continues up to a self-signed issuer.
+     *
      * @throws CertificateValidationException
      */
-    private function validateChain(array $cert): void
+    private function validateChain(X509 $cert, int $depth): void
     {
-        // Get issuer
-        $issuer = $cert['tbsCertificate']['issuer'];
+        if ($depth >= self::MAX_CHAIN_DEPTH) {
+            throw new CertificateValidationException('Certificate chain exceeds maximum depth of ' . self::MAX_CHAIN_DEPTH);
+        }
 
         // Try to find issuer certificate in trust store
-        $issuerCert = $this->trustStore->findBySubject($issuer);
+        $issuerDer = $this->trustStore->findBySubject(self::dnArray($cert->getIssuerDN(X509::DN_ARRAY)));
 
-        if ($issuerCert === null) {
+        if ($issuerDer === null) {
             throw new CertificateValidationException(
                 'Certificate chain incomplete: issuer certificate not found in trust store'
             );
         }
 
+        $issuer = self::loadCertificate($issuerDer, 'Failed to parse issuer certificate');
+
         // Verify signature using issuer's public key
-        $issuerX509 = new X509();
-        $issuerCertData = $issuerX509->loadX509($issuerCert);
-
-        if ($issuerCertData === false) {
-            throw new CertificateValidationException('Failed to parse issuer certificate');
-        }
-
-        $publicKey = $issuerX509->getPublicKey();
-
-        if ($publicKey === false) {
-            throw new CertificateValidationException('Failed to extract issuer public key');
-        }
-
-        // Verify signature
-        $this->x509->loadX509($cert);
-        $this->x509->setPublicKey($publicKey);
-
-        $signatureValid = $this->x509->validateSignature();
-        if ($signatureValid !== true) {
+        if (!$this->verifySignature($cert, $issuer)) {
             throw new CertificateValidationException('Certificate signature validation failed');
         }
 
         // Recursively validate issuer (unless self-signed)
-        if (!$this->isSelfSigned($issuerCertData)) {
-            $this->validateChain($issuerCertData);
+        if (!$this->isSelfSigned($issuer)) {
+            $this->validateChain($issuer, $depth + 1);
         }
     }
 
     /**
-     * Check if certificate is self-signed
+     * Verify that $cert was signed by the key of $issuer
      *
-     * @param array<string, mixed> $cert
+     * phpseclib 4 only validates signatures against its global CA store
+     * (X509::addCA()), so the signature is checked here directly against the issuer key.
+     *
+     * @throws CertificateValidationException
      */
-    private function isSelfSigned(array $cert): bool
+    private function verifySignature(X509 $cert, X509 $issuer): bool
     {
-        $subject = $cert['tbsCertificate']['subject'];
-        $issuer = $cert['tbsCertificate']['issuer'];
+        try {
+            $key = $issuer->getPublicKey();
+        } catch (Exception $e) {
+            throw new CertificateValidationException('Failed to extract issuer public key', 0, $e);
+        }
 
-        return $this->dnEquals($subject, $issuer);
+        if (!$key instanceof RSA\PublicKey) {
+            throw new CertificateValidationException('Unsupported issuer key type: only RSA is supported');
+        }
+
+        try {
+            $algorithm = (string) $cert['signatureAlgorithm']['algorithm'];
+
+            if (preg_match('/^(sha\d+)WithRSAEncryption$/', $algorithm, $match) === 1) {
+                if (!in_array($match[1], self::SIGNATURE_HASHES, true)) {
+                    throw new CertificateValidationException("Unsupported signature algorithm: $algorithm");
+                }
+                $key = $key->withPadding(RSA::SIGNATURE_PKCS1)->withHash($match[1]);
+            } elseif ($algorithm === 'id-RSASSA-PSS') {
+                [$hash, $mgfHash, $saltLength] = $this->parsePssParameters($cert['signatureAlgorithm']['parameters'] ?? null);
+                $key = $key
+                    ->withPadding(RSA::SIGNATURE_PSS)
+                    ->withHash($hash)
+                    ->withMGFHash($mgfHash)
+                    ->withSaltLength($saltLength);
+            } else {
+                throw new CertificateValidationException("Unsupported signature algorithm: $algorithm");
+            }
+
+            // The BIT STRING value starts with the "unused bits" octet
+            $signature = substr((string) $cert['signature'], 1);
+
+            return $key->verify($cert->getSignableSection(), $signature);
+        } catch (CertificateValidationException $e) {
+            throw $e;
+        } catch (Exception) {
+            return false;
+        }
     }
 
     /**
-     * Compare two Distinguished Names for equality
+     * Decode RSASSA-PSS-params (RFC 4055), applying the RFC defaults (SHA-1, MGF1-SHA-1, salt 20)
      *
-     * @param array<int|string, mixed> $dn1
-     * @param array<int|string, mixed> $dn2
+     * @return array{string, string, int} hash, MGF1 hash, salt length
+     * @throws CertificateValidationException
      */
-    private function dnEquals(array $dn1, array $dn2): bool
+    private function parsePssParameters(mixed $parameters): array
     {
-        // Normalize and compare DN components
-        $norm1 = $this->normalizeDN($dn1);
-        $norm2 = $this->normalizeDN($dn2);
+        $hash = 'sha1';
+        $mgfHash = 'sha1';
+        $saltLength = 20;
 
-        return $norm1 === $norm2;
-    }
+        if ($parameters !== null) {
+            $decoded = ASN1::decodeBER((string) $parameters);
+            $params = ASN1::map($decoded, RSASSA_PSS_params::MAP);
+            if (!$params instanceof ArrayAccess) {
+                throw new CertificateValidationException('Invalid RSASSA-PSS parameters');
+            }
 
-    /**
-     * Normalize DN for comparison
-     *
-     * @param array<int|string, mixed> $dn
-     */
-    private function normalizeDN(array $dn): string
-    {
-        $parts = [];
-
-        foreach ($dn as $rdn) {
-            foreach ($rdn as $attr) {
-                $type = $attr['type'] ?? '';
-                $value = $attr['value'] ?? '';
-
-                // Normalize: uppercase type, trim value
-                $parts[] = strtoupper($type) . '=' . trim($value);
+            if (isset($params['hashAlgorithm']['algorithm'])) {
+                $hash = (string) $params['hashAlgorithm']['algorithm'];
+            }
+            if (isset($params['maskGenAlgorithm']['parameters'])) {
+                $mgfDecoded = ASN1::decodeBER((string) $params['maskGenAlgorithm']['parameters']);
+                $mgfParams = ASN1::map($mgfDecoded, HashAlgorithm::MAP);
+                if (!$mgfParams instanceof ArrayAccess) {
+                    throw new CertificateValidationException('Invalid RSASSA-PSS MGF parameters');
+                }
+                $mgfHash = (string) $mgfParams['algorithm'];
+            }
+            if (isset($params['saltLength'])) {
+                $saltLength = (int) (string) $params['saltLength'];
             }
         }
 
-        sort($parts);
-        return implode(',', $parts);
+        $hash = str_replace('id-', '', $hash);
+        $mgfHash = str_replace('id-', '', $mgfHash);
+
+        if (!in_array($hash, self::SIGNATURE_HASHES, true) || !in_array($mgfHash, self::SIGNATURE_HASHES, true)) {
+            throw new CertificateValidationException("Unsupported RSASSA-PSS hash: $hash / $mgfHash");
+        }
+
+        return [$hash, $mgfHash, $saltLength];
+    }
+
+    /**
+     * Check if certificate is self-signed (subject DN equals issuer DN)
+     */
+    private function isSelfSigned(X509 $cert): bool
+    {
+        return DistinguishedName::canonical(self::dnArray($cert->getSubjectDN(X509::DN_ARRAY)))
+            === DistinguishedName::canonical(self::dnArray($cert->getIssuerDN(X509::DN_ARRAY)));
+    }
+
+    /**
+     * Narrow X509::getSubjectDN()/getIssuerDN() output (array|string) for DN_ARRAY
+     *
+     * @param array<int|string, mixed>|string $dn
+     * @return array<int|string, mixed>
+     * @throws CertificateValidationException
+     */
+    private static function dnArray(array|string $dn): array
+    {
+        if (!is_array($dn)) {
+            throw new CertificateValidationException('Failed to read DN');
+        }
+        return $dn;
     }
 
     /**
      * Parse time from certificate validity field
      *
-     * @param array<string, mixed> $timeField
+     * phpseclib 4 returns a Choice with 'utcTime' or 'generalTime', each a DateTime.
      */
-    private function parseTime(array $timeField): int
+    private function parseTime(mixed $timeField): int
     {
-        // phpseclib returns time as array with 'utcTime' or 'generalTime'
-        if (isset($timeField['utcTime'])) {
-            return strtotime($timeField['utcTime']);
-        }
+        $time = $timeField['utcTime'] ?? $timeField['generalTime'] ?? null;
 
-        if (isset($timeField['generalTime'])) {
-            return strtotime($timeField['generalTime']);
+        if ($time instanceof DateTimeInterface) {
+            return $time->getTimestamp();
         }
 
         throw new CertificateValidationException('Invalid time format in certificate');
@@ -231,97 +311,43 @@ final class CertificateValidator
     /**
      * Get certificate subject
      *
-     * @return array<int|string, mixed> DN components
+     * @return array<int|string, mixed> DN in phpseclib's X509::DN_ARRAY format (['rdnSequence' => ...])
      */
     public function getSubject(string $certificateDer): array
     {
-        $cert = $this->x509->loadX509($certificateDer);
-
-        if ($cert === false) {
-            throw new CertificateValidationException('Failed to parse certificate');
-        }
-
-        return $cert['tbsCertificate']['subject'];
+        return self::dnArray(self::loadCertificate($certificateDer)->getSubjectDN(X509::DN_ARRAY));
     }
 
     /**
      * Get certificate issuer
      *
-     * @return array<int|string, mixed> DN components
+     * @return array<int|string, mixed> DN in phpseclib's X509::DN_ARRAY format (['rdnSequence' => ...])
      */
     public function getIssuer(string $certificateDer): array
     {
-        $cert = $this->x509->loadX509($certificateDer);
-
-        if ($cert === false) {
-            throw new CertificateValidationException('Failed to parse certificate');
-        }
-
-        return $cert['tbsCertificate']['issuer'];
+        return self::dnArray(self::loadCertificate($certificateDer)->getIssuerDN(X509::DN_ARRAY));
     }
 
     /**
-     * Get human-readable subject string
+     * Get human-readable subject string, e.g. "CN=localhost, O=Example"
      */
     public function getSubjectString(string $certificateDer): string
     {
-        $cert = $this->x509->loadX509($certificateDer);
-
-        if ($cert === false) {
-            throw new CertificateValidationException('Failed to parse certificate');
-        }
-
-        // Use phpseclib's built-in DN formatting
-        $dn = $this->x509->getDN(X509::DN_STRING);
-        if (!is_string($dn)) {
-            throw new CertificateValidationException('Failed to format DN as string');
-        }
-        return $dn;
+        return $this->dnToString(self::loadCertificate($certificateDer)->getSubjectDN(X509::DN_ARRAY));
     }
 
     /**
      * Convert DN to human-readable string
      *
-     * @param array<int|string, mixed> $dn
+     * @param array<int|string, mixed>|string $dn DN in X509::DN_ARRAY format
      */
-    private function dnToString(array $dn): string
+    private function dnToString(array|string $dn): string
     {
-        $parts = [];
-
-        // phpseclib3 returns DN as nested arrays
-        // Each RDN is an array of attribute arrays
-        foreach ($dn as $rdn) {
-            // RDN can be a single attribute or an array of attributes
-            if (is_array($rdn)) {
-                foreach ($rdn as $key => $value) {
-                    if (is_string($key)) {
-                        // Direct key-value format (phpseclib3 style)
-                        $parts[] = "$key=$value";
-                    } elseif (is_array($value)) {
-                        // Nested array format
-                        $type = $value['type'] ?? '';
-                        $val = $value['value'] ?? '';
-
-                        if ($type !== '' && $val !== '') {
-                            // Map OID to common name
-                            $typeName = match ($type) {
-                                '2.5.4.3' => 'CN',
-                                '2.5.4.10' => 'O',
-                                '2.5.4.11' => 'OU',
-                                '2.5.4.6' => 'C',
-                                '2.5.4.7' => 'L',
-                                '2.5.4.8' => 'ST',
-                                default => $type,
-                            };
-
-                            $parts[] = "$typeName=$val";
-                        }
-                    }
-                }
-            }
+        try {
+            return DistinguishedName::toString(self::dnArray($dn));
+        } catch (\RuntimeException $e) {
+            throw new CertificateValidationException('Failed to format DN as string', 0, $e);
         }
-
-        return implode(', ', $parts);
     }
 
     /**
@@ -334,17 +360,17 @@ final class CertificateValidator
     {
         $this->validate($certificateDer);
 
-        $cert = $this->x509->loadX509($certificateDer);
+        $cert = self::loadCertificate($certificateDer);
 
         $validity = $cert['tbsCertificate']['validity'];
 
         return [
-            'subject' => $this->getSubjectString($certificateDer),
-            'issuer' => $this->dnToString($cert['tbsCertificate']['issuer']),
+            'subject' => $this->dnToString($cert->getSubjectDN(X509::DN_ARRAY)),
+            'issuer' => $this->dnToString($cert->getIssuerDN(X509::DN_ARRAY)),
             'thumbprint' => $this->getThumbprint($certificateDer),
             'notBefore' => $this->parseTime($validity['notBefore']),
             'notAfter' => $this->parseTime($validity['notAfter']),
-            'serialNumber' => $cert['tbsCertificate']['serialNumber']->toString(),
+            'serialNumber' => (string) $cert['tbsCertificate']['serialNumber'], // decimal
             'selfSigned' => $this->isSelfSigned($cert),
         ];
     }

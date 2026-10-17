@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace TechDock\OpcUa\Core\Security;
 
 use Exception;
-use phpseclib3\Crypt\PublicKeyLoader;
-use phpseclib3\Crypt\RSA;
+use phpseclib4\Crypt\PublicKeyLoader;
+use phpseclib4\Crypt\RSA;
+use phpseclib4\Crypt\RSA\PrivateKey;
+use phpseclib4\Crypt\RSA\PublicKey;
 use RuntimeException;
 
 /**
@@ -70,27 +72,26 @@ final class RsaCrypto
     ): string {
         $key = self::loadPrivateKey($privateKey, $password);
 
-        $result = match ($padding) {
-            RsaPadding::PKCS1 => $key
-                ->withPadding(RSA::ENCRYPTION_PKCS1)
-                ->decrypt($ciphertext),
-            RsaPadding::OAEP => $key
-                ->withPadding(RSA::ENCRYPTION_OAEP)
-                ->withHash('sha1')
-                ->withMGFHash('sha1')
-                ->decrypt($ciphertext),
-            RsaPadding::OAEP_SHA256 => $key
-                ->withPadding(RSA::ENCRYPTION_OAEP)
-                ->withHash('sha256')
-                ->withMGFHash('sha256')
-                ->decrypt($ciphertext),
-        };
-
-        if ($result === false) {
-            throw new RuntimeException('RSA decryption failed');
+        // phpseclib 4 throws on decryption failure (phpseclib 3 returned false)
+        try {
+            return match ($padding) {
+                RsaPadding::PKCS1 => $key
+                    ->withPadding(RSA::ENCRYPTION_PKCS1)
+                    ->decrypt($ciphertext),
+                RsaPadding::OAEP => $key
+                    ->withPadding(RSA::ENCRYPTION_OAEP)
+                    ->withHash('sha1')
+                    ->withMGFHash('sha1')
+                    ->decrypt($ciphertext),
+                RsaPadding::OAEP_SHA256 => $key
+                    ->withPadding(RSA::ENCRYPTION_OAEP)
+                    ->withHash('sha256')
+                    ->withMGFHash('sha256')
+                    ->decrypt($ciphertext),
+            };
+        } catch (Exception $e) {
+            throw new RuntimeException('RSA decryption failed', 0, $e);
         }
-
-        return $result;
     }
 
     /**
@@ -111,7 +112,7 @@ final class RsaCrypto
     ): string {
         $key = self::loadPrivateKey($privateKey, $password);
 
-        return match ($algorithm) {
+        $signature = match ($algorithm) {
             SignatureAlgorithm::RSA_SHA1_PKCS1 => $key
                 ->withPadding(RSA::SIGNATURE_PKCS1)
                 ->withHash('sha1')
@@ -126,6 +127,13 @@ final class RsaCrypto
                 ->withMGFHash('sha256')
                 ->sign($data),
         };
+
+        // phpseclib 4 declares string|array (arrays only for raw EC signatures)
+        if (!is_string($signature)) {
+            throw new RuntimeException('RSA signing returned an unexpected signature format');
+        }
+
+        return $signature;
     }
 
     /**
@@ -198,13 +206,17 @@ final class RsaCrypto
     /**
      * Load public key from X.509 certificate
      */
-    private static function loadPublicKeyFromCertificate(string $certificate): RSA
+    private static function loadPublicKeyFromCertificate(string $certificate): PublicKey
     {
         try {
             // Try loading as PEM-encoded certificate
             $key = PublicKeyLoader::load($certificate);
 
-            if (!$key instanceof RSA) {
+            if ($key instanceof PrivateKey) {
+                $key = $key->getPublicKey();
+            }
+
+            if (!$key instanceof PublicKey) {
                 throw new RuntimeException('Certificate does not contain RSA key');
             }
 
@@ -224,11 +236,11 @@ final class RsaCrypto
     private static function loadPrivateKey(
         string $privateKey,
         ?string $password = null
-    ): RSA {
+    ): PrivateKey {
         try {
-            $key = PublicKeyLoader::load($privateKey, $password ?? '');
+            $key = PublicKeyLoader::load($privateKey, $password);
 
-            if (!$key instanceof RSA) {
+            if (!$key instanceof PrivateKey) {
                 throw new RuntimeException('Key is not an RSA key');
             }
 
